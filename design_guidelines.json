@@ -1,0 +1,48 @@
+{
+  "app_name": "ComplyEase PCS Multi-Client Compliance Suite",
+  "archetype": "Swiss & High-Contrast / Enterprise SaaS (Archetype 4)",
+  "typography": {
+    "heading_font": "Plus Jakarta Sans, sans-serif",
+    "body_font": "Inter, sans-serif",
+    "mono_font": "JetBrains Mono, monospace"
+  },
+  "colors": {
+    "primary": "#0F172A",
+    "accent": "#2563EB",
+    "success": "#16A34A",
+    "warning": "#CA8A04",
+    "danger": "#DC2626",
+    "background": "#F8FAFC",
+    "surface": "#FFFFFF",
+    "border": "#E2E8F0"
+  },
+  "key_functionalities": [
+    "Multi-client workspaces (PCS Mode to manage multiple clients)",
+    "Compliance Register & Obligations matrix",
+    "Owners, due dates & status tracking (Compliant, Non-Compliant, Under Review, Pending)",
+    "Automated reminders and escalation tracking",
+    "Evidence & document uploads with audit history timeline",
+    "Executive dashboards & risk scoring",
+    "Reports generation & PDF/Excel exports",
+    "Excel workbook import & smart parser preview"
+  ],
+  "image_urls": [
+    {
+      "category": "dashboard_hero",
+      "url": "https://images.unsplash.com/photo-1551288049-bebda4e38f71?crop=entropy&cs=srgb&fm=jpg&q=85",
+      "description": "Professional performance analytics on screen for compliance metrics"
+    },
+    {
+      "category": "audit_review",
+      "url": "https://images.pexels.com/photos/8068691/pexels-photo-8068691.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "description": "Professionals reviewing compliance reports and obligations"
+    }
+  ],
+  "universal_guidelines": [
+    "All interactive elements must include data-testid attributes",
+    "Clean cardless high-density dashboard layouts with sharp borders (8px radius)",
+    "No transparent dropdowns or unstyled inputs",
+    "Full multi-client switching with isolated client state",
+    "Fully working Excel workbook parser & generator mock"
+  ]
+}
