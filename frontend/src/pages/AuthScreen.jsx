@@ -48,7 +48,7 @@ export default function AuthScreen({ onAuth }) {
           </>
         )}
         <label>Email<input data-testid="auth-email-input" type="email" required onChange={(e) => setForm({ ...form, email: e.target.value })} /></label>
-        <label>Password<input data-testid="auth-password-input" type="password" required minLength="6" onChange={(e) => setForm({ ...form, password: e.target.value })} /></label>
+        <label>Password<input data-testid="auth-password-input" type="password" required minLength="8" onChange={(e) => setForm({ ...form, password: e.target.value })} /></label>
         {message && <div data-testid="auth-message" className="auth-message">{message}</div>}
         <button data-testid="auth-submit-button" className="button primary" disabled={busy}>
           {busy ? "Working…" : (mode === "login" ? "Sign in" : "Send approval request")} <ArrowUpRight size={16} />

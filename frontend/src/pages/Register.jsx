@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowUpRight, PlayCircle, Search } from "lucide-react";
+import { ArrowUpRight, Paperclip, PlayCircle, Search, X } from "lucide-react";
 import { api } from "@/lib/api";
 
 const STATUSES = ["On track", "Due soon", "Under review", "Overdue", "Ready for review", "Approved", "Rework", "Completed"];
@@ -25,12 +25,37 @@ export default function Register({ activeClient, onToast }) {
   const [fy, setFy] = useState(fyOptions()[1]);
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState("all");
+  const [evidence, setEvidence] = useState({}); // { obligation_id: [files] }
 
   const load = () => {
     if (!activeClient) return;
     api.get(`/clients/${activeClient.id}/obligations`).then((r) => setItems(r.data));
   };
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [activeClient?.id]);
+  useEffect(() => { load(); setEvidence({}); /* eslint-disable-next-line */ }, [activeClient?.id]);
+
+  const loadEvidence = async (obligationId) => {
+    const r = await api.get(`/clients/${activeClient.id}/evidence?obligation_id=${obligationId}`);
+    setEvidence((prev) => ({ ...prev, [obligationId]: r.data }));
+  };
+
+  const uploadEvidence = async (obligationId, file) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    await api.post(`/clients/${activeClient.id}/evidence?obligation_id=${obligationId}`, fd);
+    onToast(`Attached ${file.name}`);
+    loadEvidence(obligationId);
+  };
+
+  const removeEvidence = async (obligationId, evidenceId) => {
+    await api.delete(`/clients/${activeClient.id}/evidence/${evidenceId}`);
+    onToast("Evidence removed");
+    loadEvidence(obligationId);
+  };
+
+  const toggleExpanded = (id) => {
+    setExpanded(expanded === id ? null : id);
+    if (id && !evidence[id]) loadEvidence(id);
+  };
 
   const generate = async () => {
     setBusy(true);
@@ -112,7 +137,7 @@ export default function Register({ activeClient, onToast }) {
                   {STATUSES.map((s) => <option key={s}>{s}</option>)}
                 </select>
               </span>
-              <button data-testid={`obligation-${x.id}-expand`} className="row-action" onClick={() => setExpanded(expanded === x.id ? null : x.id)}>
+              <button data-testid={`obligation-${x.id}-expand`} className="row-action" onClick={() => toggleExpanded(x.id)}>
                 {expanded === x.id ? "Close" : "Open"} <ArrowUpRight size={14} />
               </button>
             </div>
@@ -124,6 +149,18 @@ export default function Register({ activeClient, onToast }) {
                 </div>
                 <label>Working remarks<textarea data-testid={`obligation-${x.id}-remarks`} rows="2" defaultValue={x.remarks || ""} onBlur={(e) => e.target.value !== (x.remarks || "") && patch(x.id, { remarks: e.target.value })} /></label>
                 <p className="obligation-description">{x.description}</p>
+                <div className="evidence-block" data-testid={`evidence-block-${x.id}`}>
+                  {(evidence[x.id] || []).map((ev) => (
+                    <span key={ev.id} className="evidence-chip" data-testid={`evidence-${ev.id}`}>
+                      <Paperclip size={12} /> {ev.filename}
+                      <button className="row-action muted" data-testid={`evidence-${ev.id}-remove`} onClick={() => removeEvidence(x.id, ev.id)}><X size={11} /></button>
+                    </span>
+                  ))}
+                  <label className="evidence-upload" data-testid={`evidence-upload-${x.id}`}>
+                    <Paperclip size={13} /> Attach evidence
+                    <input type="file" hidden data-testid={`evidence-input-${x.id}`} onChange={(e) => e.target.files[0] && uploadEvidence(x.id, e.target.files[0])} />
+                  </label>
+                </div>
                 <div className="maker-checker">
                   {x.status !== "Ready for review" && x.status !== "Approved" && (
                     <button data-testid={`submit-${x.id}`} className="button" onClick={() => patch(x.id, { remarks: x.remarks || "" }, "submit")}>Submit for review</button>

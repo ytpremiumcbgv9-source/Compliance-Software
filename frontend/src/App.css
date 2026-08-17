@@ -266,9 +266,22 @@ details summary { cursor: pointer; font-size: 12px; color: var(--blue); font-wei
 
 .demo-pill { display: inline-block; background: #fef3c7; color: #b45309; font: 700 9px Inter; padding: 2px 6px; border-radius: 3px; margin-left: 6px; letter-spacing: 0.5px; }
 
-/* ---- Form hint ---- */
-.form-hint { display: inline-flex; align-items: center; color: var(--muted); margin-left: 4px; cursor: help; }
-.form-hint:hover { color: var(--blue); }
+/* ---- Evidence chips ---- */
+.evidence-block { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding-top: 4px; }
+.evidence-chip { display: inline-flex; align-items: center; gap: 5px; background: #eff6ff; color: #1d4ed8; padding: 5px 10px; border-radius: 4px; font: 600 11px Inter; }
+.evidence-upload { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px dashed var(--line); border-radius: 4px; cursor: pointer; font: 600 11px Inter; color: var(--muted); }
+.evidence-upload:hover { border-color: var(--blue); color: var(--blue); }
+
+/* ---- Profile settings ---- */
+.profile-card { background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 26px; max-width: 480px; }
+.profile-card h3 { font: 700 15px 'Plus Jakarta Sans'; margin: 0 0 6px; }
+.profile-card p { font-size: 12px; color: var(--muted); margin: 0 0 20px; }
+.profile-card label { font-size: 11px; font-weight: 600; margin-bottom: 14px; display: block; }
+.profile-card input { display: block; width: 100%; border: 1px solid var(--line); padding: 10px 12px; margin-top: 5px; outline: 0; font: 12px Inter; border-radius: 4px; }
+.profile-card input:focus { border-color: var(--blue); }
+.profile-detail { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; padding: 16px 0; border-top: 1px solid var(--line); font-size: 12px; }
+.profile-detail dt { color: var(--muted); font-weight: 500; }
+.profile-detail dd { margin: 0; font-weight: 600; }
 
 /* ---- Responsive ---- */
 @media (max-width: 1100px) {

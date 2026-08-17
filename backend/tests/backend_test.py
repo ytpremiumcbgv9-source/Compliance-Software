@@ -91,6 +91,64 @@ class TestAuth:
         s.cookies.clear()
         assert s.get(f"{API}/auth/me", timeout=20).status_code == 401
 
+    def test_signup_rejects_short_password(self):
+        r = requests.post(f"{API}/auth/signup", json={
+            "name": "TEST Short", "email": f"TEST_{uuid.uuid4().hex[:8]}@test.local",
+            "password": "short7!", "practice_name": "TEST Firm",
+        }, timeout=20)
+        assert r.status_code == 400
+        assert "at least 8" in r.json()["detail"].lower()
+
+    def test_login_rate_limiter_locks_after_5_attempts(self):
+        # Use non-existent email so we don't lock out the real owner.
+        email = f"TEST_ratelimit_{uuid.uuid4().hex[:8]}@test.local"
+        codes = []
+        for _ in range(5):
+            r = requests.post(f"{API}/auth/login",
+                              json={"email": email, "password": "wrong"}, timeout=20)
+            codes.append(r.status_code)
+        # first 5 attempts should be 401
+        assert all(c == 401 for c in codes), f"expected all 401, got {codes}"
+        # 6th attempt should be 429
+        r6 = requests.post(f"{API}/auth/login",
+                           json={"email": email, "password": "wrong"}, timeout=20)
+        assert r6.status_code == 429, f"expected 429 on 6th attempt, got {r6.status_code}: {r6.text[:200]}"
+
+    def test_rate_limit_resets_after_successful_login(self):
+        # Create a fresh approved member so we can consume 4 attempts then succeed to reset.
+        email = f"TEST_rl2_{uuid.uuid4().hex[:8]}@test.local"
+        pw = "MemberPass!123"
+        signup = requests.post(f"{API}/auth/signup", json={
+            "name": "TEST RL", "email": email, "password": pw,
+            "practice_name": "TEST Firm",
+        }, timeout=20)
+        assert signup.status_code == 200
+        uid = signup.json()["user"]["id"]
+        # owner approve
+        owner = requests.Session()
+        owner.post(f"{API}/auth/login",
+                   json={"email": OWNER_EMAIL, "password": OWNER_PASSWORD}, timeout=20)
+        owner.patch(f"{API}/owner/requests/{uid}",
+                    json={"approved": True, "client_limit": 1}, timeout=20)
+        try:
+            # 4 wrong attempts (below the limit of 5)
+            for _ in range(4):
+                r = requests.post(f"{API}/auth/login",
+                                  json={"email": email, "password": "wrong"}, timeout=20)
+                assert r.status_code == 401
+            # successful login should reset counter
+            ok = requests.post(f"{API}/auth/login",
+                               json={"email": email, "password": pw}, timeout=20)
+            assert ok.status_code == 200
+            # now 4 more wrong attempts must all be 401 (counter was reset)
+            for i in range(4):
+                r = requests.post(f"{API}/auth/login",
+                                  json={"email": email, "password": "wrong"}, timeout=20)
+                assert r.status_code == 401, f"attempt {i} after reset returned {r.status_code}"
+        finally:
+            owner.patch(f"{API}/owner/users/{uid}/status",
+                        json={"status": "suspended"}, timeout=20)
+
     def test_signup_pending_and_suspended_cannot_login(self, owner_session):
         # signup random member -> pending
         email = f"TEST_{uuid.uuid4().hex[:8]}@test.local"
@@ -589,3 +647,136 @@ class TestMakerChecker:
             owner_session.patch(f"{API}/owner/users/{uid}/status",
                                 json={"status": "suspended"}, timeout=20)
 
+
+
+# ---------------------------------------------------------------------------
+# Change-password + profile update
+# ---------------------------------------------------------------------------
+class TestAccountManagement:
+    def test_change_password_flow_and_reset(self, owner_session):
+        # wrong current -> 401
+        wrong = owner_session.post(f"{API}/auth/change-password", json={
+            "current_password": "not-real-pass!", "new_password": "AnotherPass!456",
+        }, timeout=20)
+        assert wrong.status_code == 401
+
+        # short new -> 400
+        short = owner_session.post(f"{API}/auth/change-password", json={
+            "current_password": OWNER_PASSWORD, "new_password": "short7!",
+        }, timeout=20)
+        assert short.status_code == 400
+        assert "at least 8" in short.json()["detail"].lower()
+
+        # correct -> 200
+        NEW_PW = "OwnerTemp!789"
+        try:
+            ok = owner_session.post(f"{API}/auth/change-password", json={
+                "current_password": OWNER_PASSWORD, "new_password": NEW_PW,
+            }, timeout=20)
+            assert ok.status_code == 200
+
+            # login with new password works
+            fresh = requests.Session()
+            r = fresh.post(f"{API}/auth/login",
+                           json={"email": OWNER_EMAIL, "password": NEW_PW}, timeout=20)
+            assert r.status_code == 200
+
+            # login with old password fails
+            r = requests.post(f"{API}/auth/login",
+                              json={"email": OWNER_EMAIL, "password": OWNER_PASSWORD}, timeout=20)
+            assert r.status_code == 401
+        finally:
+            # RESET back to OWNER_PASSWORD so shared credentials still work
+            # (use a fresh authenticated session with the new password)
+            reset_sess = requests.Session()
+            reset_sess.post(f"{API}/auth/login",
+                            json={"email": OWNER_EMAIL, "password": NEW_PW}, timeout=20)
+            r = reset_sess.post(f"{API}/auth/change-password", json={
+                "current_password": NEW_PW, "new_password": OWNER_PASSWORD,
+            }, timeout=20)
+            assert r.status_code == 200, f"CRITICAL: could not reset owner password back! {r.text}"
+
+    def test_profile_update_reflects_in_me(self, owner_session):
+        original = owner_session.get(f"{API}/auth/me", timeout=20).json()
+        try:
+            new_name = f"TEST Owner {uuid.uuid4().hex[:4]}"
+            new_practice = f"TEST Practice {uuid.uuid4().hex[:4]}"
+            r = owner_session.patch(f"{API}/auth/profile", json={
+                "name": new_name, "practice_name": new_practice,
+            }, timeout=20)
+            assert r.status_code == 200
+            body = r.json()
+            assert body["name"] == new_name
+            assert body["practice_name"] == new_practice
+
+            me = owner_session.get(f"{API}/auth/me", timeout=20).json()
+            assert me["name"] == new_name
+            assert me["practice_name"] == new_practice
+        finally:
+            # restore original name/practice so subsequent tests / UI don't see junk
+            owner_session.patch(f"{API}/auth/profile", json={
+                "name": original["name"], "practice_name": original["practice_name"],
+            }, timeout=20)
+
+
+# ---------------------------------------------------------------------------
+# Evidence per obligation
+# ---------------------------------------------------------------------------
+class TestEvidence:
+    def test_evidence_per_obligation_and_delete(self, owner_session, owner_client):
+        cid = owner_client["id"]
+        # generate obligations so we have real IDs to link to
+        owner_session.post(f"{API}/clients/{cid}/generate-obligations",
+                           json={"fy": "2026-27"}, timeout=30)
+        rows = owner_session.get(f"{API}/clients/{cid}/obligations", timeout=20).json()
+        ob1 = rows[0]["id"]
+        ob2 = rows[1]["id"]
+
+        # Upload one file linked to ob1
+        content1 = b"TEST evidence for ob1"
+        u1 = owner_session.post(
+            f"{API}/clients/{cid}/evidence",
+            params={"obligation_id": ob1},
+            files={"file": ("TEST_ev1.txt", content1, "text/plain")},
+            timeout=20,
+        )
+        assert u1.status_code == 200, u1.text
+        ev1 = u1.json()
+        assert ev1["obligation_id"] == ob1
+        assert ev1["filename"] == "TEST_ev1.txt"
+
+        # Upload one file linked to ob2
+        u2 = owner_session.post(
+            f"{API}/clients/{cid}/evidence",
+            params={"obligation_id": ob2},
+            files={"file": ("TEST_ev2.txt", b"body 2", "text/plain")},
+            timeout=20,
+        )
+        assert u2.status_code == 200
+        ev2 = u2.json()
+
+        # GET with filter returns only ob1's file
+        f1 = owner_session.get(f"{API}/clients/{cid}/evidence",
+                               params={"obligation_id": ob1}, timeout=20).json()
+        ids1 = {e["id"] for e in f1}
+        assert ev1["id"] in ids1
+        assert ev2["id"] not in ids1, "filter leaked evidence from other obligation"
+
+        # GET without filter returns both
+        all_ev = owner_session.get(f"{API}/clients/{cid}/evidence", timeout=20).json()
+        all_ids = {e["id"] for e in all_ev}
+        assert {ev1["id"], ev2["id"]}.issubset(all_ids)
+
+        # DELETE ev1
+        d = owner_session.delete(f"{API}/clients/{cid}/evidence/{ev1['id']}", timeout=20)
+        assert d.status_code == 200
+        after = owner_session.get(f"{API}/clients/{cid}/evidence", timeout=20).json()
+        after_ids = {e["id"] for e in after}
+        assert ev1["id"] not in after_ids
+        assert ev2["id"] in after_ids
+
+        # audit log has evidence.uploaded + evidence.removed
+        log = owner_session.get(f"{API}/clients/{cid}/audit-log", timeout=20).json()
+        actions = {row["action"] for row in log}
+        assert "evidence.uploaded" in actions
+        assert "evidence.removed" in actions

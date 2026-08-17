@@ -39,6 +39,20 @@ api = APIRouter(prefix="/api")
 JWT_ALGORITHM = "HS256"
 JWT_TTL_HOURS = 8
 
+# Basic in-memory login rate limiter (5 attempts / 5 min per email)
+_LOGIN_ATTEMPTS: Dict[str, List[datetime]] = {}
+_LOGIN_WINDOW = timedelta(minutes=5)
+_LOGIN_MAX = 5
+
+
+def _rate_limit(email: str) -> None:
+    now = datetime.now(timezone.utc)
+    attempts = [t for t in _LOGIN_ATTEMPTS.get(email, []) if now - t < _LOGIN_WINDOW]
+    if len(attempts) >= _LOGIN_MAX:
+        raise HTTPException(429, "Too many login attempts. Try again in a few minutes.")
+    attempts.append(now)
+    _LOGIN_ATTEMPTS[email] = attempts
+
 # ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
@@ -47,6 +61,16 @@ class SignupIn(BaseModel):
     email: str
     password: str
     practice_name: str
+
+
+class ChangePasswordIn(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class UpdateProfileIn(BaseModel):
+    name: Optional[str] = None
+    practice_name: Optional[str] = None
 
 
 class LoginIn(BaseModel):
@@ -452,6 +476,8 @@ async def root():
 @api.post("/auth/signup")
 async def signup(payload: SignupIn):
     email = payload.email.strip().lower()
+    if len(payload.password) < 8:
+        raise HTTPException(400, "Password must be at least 8 characters")
     if await db.users.find_one({"email": email}):
         raise HTTPException(409, "An account with this email already exists")
     has_owner = await db.users.find_one({"role": "owner"})
@@ -475,13 +501,16 @@ async def signup(payload: SignupIn):
 
 @api.post("/auth/login")
 async def login(payload: LoginIn, response: Response):
-    user = await db.users.find_one({"email": payload.email.strip().lower()}, {"_id": 0})
+    email = payload.email.strip().lower()
+    _rate_limit(email)
+    user = await db.users.find_one({"email": email}, {"_id": 0})
     if not user or not verify_password(payload.password, user["password_hash"]):
         raise HTTPException(401, "Invalid email or password")
     if user.get("status") == "suspended":
         raise HTTPException(403, "Your account has been suspended by the owner")
     if user.get("status") != "approved":
         raise HTTPException(403, "Your signup request is awaiting owner approval")
+    _LOGIN_ATTEMPTS.pop(email, None)  # clear on success
     response.set_cookie(
         "access_token", make_token(user),
         httponly=True, secure=True, samesite="none",
@@ -499,6 +528,25 @@ async def logout(response: Response):
 @api.get("/auth/me")
 async def me(user=Depends(current_user)):
     return public_user(user)
+
+
+@api.post("/auth/change-password")
+async def change_password(payload: ChangePasswordIn, user=Depends(current_user)):
+    if not verify_password(payload.current_password, user["password_hash"]):
+        raise HTTPException(401, "Current password is incorrect")
+    if len(payload.new_password) < 8:
+        raise HTTPException(400, "New password must be at least 8 characters")
+    await db.users.update_one({"id": user["id"]}, {"$set": {"password_hash": hash_password(payload.new_password)}})
+    return {"message": "Password updated"}
+
+
+@api.patch("/auth/profile")
+async def update_profile(payload: UpdateProfileIn, user=Depends(current_user)):
+    changes = {k: v for k, v in payload.model_dump().items() if v is not None and v.strip()}
+    if changes:
+        await db.users.update_one({"id": user["id"]}, {"$set": changes})
+    updated = await db.users.find_one({"id": user["id"]}, {"_id": 0})
+    return public_user(updated)
 
 
 # ---------------------------------------------------------------------------
@@ -685,26 +733,48 @@ async def get_audit_log(client_id: str, user=Depends(current_user)):
 
 
 @api.get("/clients/{client_id}/evidence")
-async def list_evidence(client_id: str, user=Depends(current_user)):
+async def list_evidence(client_id: str, obligation_id: Optional[str] = None, user=Depends(current_user)):
     await ensure_owned_client(client_id, user)
-    return await db.evidence.find({"client_id": client_id}, {"_id": 0}).to_list(500)
+    query = {"client_id": client_id}
+    if obligation_id:
+        query["obligation_id"] = obligation_id
+    return await db.evidence.find(query, {"_id": 0}).sort("uploaded_at", -1).to_list(500)
 
 
 @api.post("/clients/{client_id}/evidence")
-async def upload_evidence(client_id: str, file: UploadFile = File(...), user=Depends(current_user)):
+async def upload_evidence(client_id: str, file: UploadFile = File(...),
+                          obligation_id: Optional[str] = None, user=Depends(current_user)):
     await ensure_owned_client(client_id, user)
+    if obligation_id:
+        ob = await db.obligations.find_one({"id": obligation_id, "client_id": client_id}, {"_id": 0, "id": 1})
+        if not ob:
+            raise HTTPException(400, "Obligation does not belong to this client")
+    content = await file.read()
     record = {
         "id": str(uuid.uuid4()),
         "client_id": client_id,
+        "obligation_id": obligation_id,
         "filename": file.filename,
         "content_type": file.content_type,
+        "size": len(content),
         "uploaded_at": now_iso(),
         "uploaded_by": user["name"],
     }
     await db.evidence.insert_one(dict(record))
     await log_audit(client_id, user, "evidence.uploaded",
-                    f"Uploaded evidence {file.filename}", "evidence", record["id"])
+                    f"Uploaded {file.filename}" + (f" for obligation {obligation_id[:8]}" if obligation_id else ""),
+                    "evidence", record["id"])
     return strip(record)
+
+
+@api.delete("/clients/{client_id}/evidence/{evidence_id}")
+async def delete_evidence(client_id: str, evidence_id: str, user=Depends(current_user)):
+    await ensure_owned_client(client_id, user)
+    result = await db.evidence.delete_one({"id": evidence_id, "client_id": client_id})
+    if result.deleted_count:
+        await log_audit(client_id, user, "evidence.removed",
+                        f"Removed evidence {evidence_id[:8]}", "evidence", evidence_id)
+    return {"message": "Removed"}
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,39 @@
+{
+  "summary": "Enterprise-readiness pass (ComplyEase v3). Extended backend suite to 30 tests (24 prior + 6 new) — all pass on external URL. New coverage: signup short-password (400), login rate-limit lockout after 5 (429), rate-limit counter reset on successful login, POST /auth/change-password (wrong-current 401, short-new 400, correct 200 with login-with-new + revert), PATCH /auth/profile reflected in /auth/me, POST/GET/DELETE evidence with obligation_id filter and audit-log entries. Frontend UI verified for Settings tab (profile update + reload persistence + restore, short-password toast, real change-password + revert) and Register evidence flow (expand → upload → chip → remove). FormHint.jsx and .form-hint CSS confirmed removed. Owner password verified restored to OwnerPass!123 at the end (200 with original, 401 with temp).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Register — obligation detail", "issues": ["Hydration warning in console: <span> cannot be a child of <option> (Register.jsx line ~100 in the FY select). Runtime works but React logs a warning. Consider rendering the option label without the wrapping <span> that the tour/highlight overlay injects, or exclude <option> children from that instrumentation."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Optional: silence the hydration warning about <span> inside <option> triggered on the Register FY <select>. Not a functional bug but noisy in console."
+  ],
+  "critical_code_review_comments": [
+    "Rate limiter is process-local (in-memory dict). Under gunicorn/uvicorn workers > 1 or multi-pod deploys the 5/5min limit becomes per-worker, effectively multiplying the allowance. Document as a single-worker constraint or move to Redis for prod.",
+    "update_profile currently strips values where v.strip() is falsy; that silently ignores whitespace-only inputs but also treats empty string as a no-op instead of a validation error. Consider returning 400 when a client sends {'name':''} explicitly.",
+    "POST /clients/{cid}/evidence takes obligation_id as a query param (Optional). Consider validating that the referenced obligation belongs to the same client to prevent linking evidence to another tenant's obligation id via a crafted request."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py"
+  ],
+  "success_rate": {
+    "backend": "100% (30/30)",
+    "frontend": "100% of tested flows (Settings profile, Settings password change+revert, Register evidence upload+remove)"
+  },
+  "seed_data_creation": "TEST_ auto-cleaned clients and members per test; owner client_limit bumped to 50 for xdist. Owner name may briefly flip to 'TEST Owner UI' during UI test then restored.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "owner.1786939113@test.local / OwnerPass!123 (verified restored)",
+  "context_for_next_testing_agent": "Backend v3 fully green (30 tests). Rate-limit tests use NON-existent emails to protect the shared owner account. Change-password tests always revert to OwnerPass!123 in a try/finally — if a test crash ever leaves the password on 'OwnerTemp!789', log in with that and PATCH it back. ImportWizard changeTarget/guessMapping JS logic reviewed but not executed via UI (would need multi-sheet xlsx upload); backend imports/preview + apply covered end-to-end in TestImports.",
+  "rca_of_the_issue": "Not applicable — all tests pass."
+}

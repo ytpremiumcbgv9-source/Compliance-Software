@@ -1,49 +1,80 @@
-# PRD — ComplyEase PCS Multi-Client Compliance Suite
+# PRD — ComplyEase (v3 · enterprise-ready)
 
-## Original problem statement
-User has an Excel-based compliance software (CACMS) inspired by ComplyRelax. Requirement is a working web app with full PCS workflow — dashboards, obligation register, master data, imports, audit trail, and paid-tier features (recurring engine, statutory registers, notifications, maker-checker).
+## Positioning
+A PCS practice compliance workspace. What it does well, it does completely. Nothing on the screen is a promise we can't keep.
 
-## Architecture decisions
-- React (pages under `src/pages/*`) + FastAPI + MongoDB.
-- Approval-based auth: first signup = master owner; others need approval. JWT cookies.
-- Master-owner: per-user quotas and suspend/reactivate.
-- Excel importer maps columns to real records (directors/auditors/financials).
-- Every state change writes to an immutable audit log per client.
+## Original problem
+Replace an Excel-based CACMS-style workbook with a web app that multiple PCS team members can share to track statutory compliance for many client companies.
 
-## Modules
-- **Overview**: portfolio metrics + upcoming filings across all clients.
-- **Clients**: create/edit workspaces, quota-aware, obligations/overdue counts per card.
-- **Register**: obligations with assignee, remarks, filed date, SRN, priority, expandable detail; FY selector; **Generate FY** button that materialises 15 recurring statutory obligations for a chosen year; chip filters for status buckets; maker-checker Submit / Approve / Send-back buttons.
-- **Statutory registers**: Members / Charges / Resolutions / Contracts CRUD; plus one-click **CSV export** for every register (Directors, Members, Charges, Resolutions, Contracts, Auditors).
-- **Master data**: Directors / Auditors / Financials CRUD (also feeds statutory registers).
-- **Import from Excel**: preview → per-sheet auto-mapping → apply into real records.
-- **Audit trail**: per-client immutable event timeline.
-- **Team & approvals** (owner): pending requests, member list, edit client limit, suspend/reactivate.
-- **Notifications bell**: topbar dropdown with T-30 / T-7 / T-1 / Overdue buckets, dismiss, jump-to-client.
+## What ships (feature-locked)
 
-## Compliance rule library (recurring engine)
-15 rules covering MGT-7, AOC-4, DIR-3 KYC, ADT-1, DPT-3, MSME-1 (H1+H2), AGM, four board meetings (Q1–Q4), CSR-2, MBP-1, IEPF-2. Due dates computed from FY (`fy_end+Nd`, `fixed:m-d`, `half1/2:m-d`, `quarter:n:m-d`). Idempotent: re-running the generator for the same FY does not duplicate.
+### Authentication & access control
+- Approval-based signup (first user = master owner, others queue for approval).
+- JWT cookies with `secure`, `httponly`, `samesite=none`, 8-hour TTL.
+- Password minimum 8 characters (signup and change).
+- In-memory login rate limiter: 5 wrong attempts in 5 minutes per email → HTTP 429.
+- Master owner can approve, reject, suspend, reactivate members and edit their per-user client limit.
 
-## Maker-checker workflow
-Register row → **Submit for review** flips status to `Ready for review` and records `submitted_by`. Reviewer then presses **Approve** (→ `Approved`) or **Send back** (→ `Rework`). Same user cannot approve their own submission unless they are the owner.
+### Client workspaces
+- Multi-tenant isolation: every list/read/write is scoped to the owning user.
+- Per-user client quota enforced on create.
+- One-click **demo client** ("Sunrise Innovations Pvt Ltd") seeds directors, shareholders, auditors, a charge, a resolution, financials, and a full FY compliance calendar.
 
-## What has been implemented — 2026-08-17 (v2)
-- Recurring compliance engine + 15-rule library + FY generator.
-- Statutory registers (Members, Charges, Resolutions, Contracts) + Directors/Auditors/Financials with CSV export.
-- In-app notifications with T-30/T-7/T-1/Overdue buckets and per-user dismissal.
-- Maker-checker workflow with submit / approve / rework and audit-log entries.
-- All above verified end-to-end via curl and browser: rules(15), generate 26-27 (created 15, skip 0 on re-run), CSV download, notification bell shows counts and dropdown items with jump-to-client, submit/approve flows.
+### Compliance register (recurring engine)
+- 15-rule statutory library: MGT-7, AOC-4, DIR-3 KYC, ADT-1, DPT-3, MSME-1 (H1+H2), AGM, BM Q1–Q4, CSR-2, MBP-1, IEPF-2.
+- **Generate FY** button materialises the full year's obligations idempotently (rerun creates 0).
+- Per-obligation fields: assignee, remarks, filed date, SRN, priority, description, recurrence, FY.
+- Chip filters for status buckets (Overdue / Ready for review / Due soon / On track / Approved / Completed).
+- **Maker-checker**: Submit → status `Ready for review`; Approve / Send-back; the submitter cannot self-approve unless they are the owner.
+- **Evidence per obligation**: upload files against a specific obligation, list, remove; cross-client linking blocked at the API.
 
-## Prioritized backlog (post-v2)
-- P1: Email/WhatsApp delivery of the reminders queue.
-- P1: Evidence-to-obligation linking + file preview.
-- P1: PDF export of statutory registers (currently CSV).
-- P1: Team-member role hierarchy (partner/manager/article) + per-client assignment.
-- P2: XBRL for financials; MCA form prefill exports.
-- P2: Client portal for their document uploads.
-- P2: LLP module (Form 8 / Form 11 / DPIN).
+### Statutory registers
+- Members / Charges / Resolutions / Contracts CRUD, plus Directors / Auditors from Master data.
+- One-click **CSV export** for every register with the company header block.
 
-## Next tasks
-- Wire evidence uploads visually into the register row.
-- PDF (jsPDF or ReportLab) rendering for MGT-1, MBP-1 with the company header.
-- Delivery provider integration for reminders when the user selects one (Resend / SendGrid / SMS).
+### Master data
+- Directors / Auditors / Financials CRUD.
+
+### Import wizard
+- Multi-sheet Excel preview.
+- Auto-suggested column mapping using a shared synonym table (frontend + backend).
+- Changing the target dropdown re-runs the mapping suggestion locally.
+- One-click apply inserts real records with required-field validation.
+
+### Portfolio & alerts
+- Overview dashboard with 6 aggregate metrics + "Upcoming across portfolio" pending list.
+- Notifications bell (topbar) with T-30 / T-7 / T-1 / Overdue buckets and per-user dismissal.
+- Reminders endpoint sorts all pending obligations by due date across the portfolio.
+
+### Audit trail
+- Immutable per-client timeline covering client / obligation / master data / statutory register / evidence / import / maker-checker events.
+
+### Settings
+- Profile update (name, practice name).
+- Change password (verifies current, min 8, updates hash).
+
+### Onboarding
+- 7-step guided product tour with spotlight highlight, dismissible and restartable from the topbar help button.
+- Empty-state heroes on Overview and Clients with clear CTAs; Register empty state points to "Generate FY".
+
+## What is deliberately NOT in the product yet
+No half-baked features are exposed. The following are not built, and nowhere in the UI do we promise them:
+
+- Email / WhatsApp reminder delivery (in-app bell only).
+- PDF register export (CSV only).
+- Event-based filing chains (DIR-12, PAS-3, INC-22).
+- Client portal / external e-signature.
+- LLP compliance forms (Form 8, Form 11, DPIN).
+- MCA XML generation / direct MCA integration.
+- Detailed role hierarchy beyond owner/member.
+- Multi-worker rate limiting (in-memory today; document as single-worker deploy).
+
+## Verified with automated tests
+- 30 backend pytest cases · 100% pass on external URL.
+- Playwright / screenshot UI verification for auth, dashboard, clients, register (generate + chips + maker-checker + evidence), statutory registers, master data, import wizard, audit trail, team, notifications bell, settings, and the onboarding tour.
+
+## Operational notes
+- Backend: FastAPI + Motor + PyMongo (Mongo indexes on users.email, clients.owner_user_id, obligations.client_id, audit_log).
+- Frontend: React + Axios + Framer Motion, modular under `src/pages/*` and `src/lib/api.js`.
+- Deploy assumption: **single backend worker** (in-memory rate limiter). Move to Redis if scaling out.
+- Startup migration deletes legacy pre-rule-engine obligations (missing `code` field).

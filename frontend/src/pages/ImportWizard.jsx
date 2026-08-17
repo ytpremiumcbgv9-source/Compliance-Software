@@ -8,6 +8,39 @@ const TARGET_LABEL = {
   financials: "Financial inputs",
 };
 
+const FIELD_SYNONYMS = {
+  name: ["name", "director", "director name", "full name", "person"],
+  din: ["din", "dpin", "director identification"],
+  designation: ["designation", "role", "position"],
+  appointment_date: ["appointment", "appointed on", "date of appointment", "appointment date", "doa"],
+  cessation_date: ["cessation", "resignation", "date of cessation", "resigned on"],
+  kyc_status: ["kyc", "kyc status", "dir-3", "dir3 status"],
+  email: ["email", "e-mail", "email id"],
+  pan: ["pan", "pan no", "permanent account"],
+  firm_name: ["firm", "audit firm", "auditor", "firm name", "auditor name"],
+  frn: ["frn", "firm registration", "firm reg no"],
+  term_end_date: ["term end", "term ends", "term expiry", "end date"],
+  fy_end: ["fy", "fy end", "year end", "financial year", "as at", "as on"],
+  revenue: ["revenue", "turnover from operations", "total income", "income"],
+  profit: ["profit", "pat", "net profit", "profit after tax"],
+  net_worth: ["net worth", "networth"],
+  paid_up_capital: ["paid up", "paid-up capital", "share capital"],
+  borrowings: ["borrowings", "loans", "debt"],
+  turnover: ["turnover", "sales"],
+};
+
+function guessMapping(columns, targetFields) {
+  const lowered = Object.fromEntries(columns.map((c) => [c, c.trim().toLowerCase()]));
+  const out = {};
+  for (const field of targetFields) {
+    const needles = FIELD_SYNONYMS[field] || [field.replace(/_/g, " ")];
+    for (const col of columns) {
+      if (needles.some((n) => lowered[col].includes(n))) { out[field] = col; break; }
+    }
+  }
+  return out;
+}
+
 export default function ImportWizard({ activeClient, onToast, refreshMasterCounts }) {
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(null);
@@ -36,10 +69,10 @@ export default function ImportWizard({ activeClient, onToast, refreshMasterCount
   };
 
   const changeTarget = (sheet, target) => {
-    const s = preview.sheets.find((x) => x.name === sheet);
-    const suggested = { directors: {}, auditors: {}, financials: {} };
-    setSheetState((prev) => ({ ...prev, [sheet]: { target, mapping: {}, applied: false } }));
-    // Fresh auto-suggest by asking backend? Keep simple: clear and let user pick.
+    const sheetData = preview.sheets.find((x) => x.name === sheet);
+    const fields = preview.targets[target] || [];
+    const mapping = guessMapping(sheetData.columns, fields);
+    setSheetState((prev) => ({ ...prev, [sheet]: { target, mapping, applied: false } }));
   };
 
   const changeMapping = (sheet, field, column) => {

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import {
   Building2, CalendarDays, CheckCircle2, ClipboardCheck, FileSpreadsheet,
-  HelpCircle, History, LayoutDashboard, LogOut, Plus, ScrollText, ShieldCheck, UserSquare2, Users,
+  HelpCircle, History, LayoutDashboard, LogOut, Plus, ScrollText, Settings as SettingsIcon,
+  ShieldCheck, UserSquare2, Users,
 } from "lucide-react";
 
 import { api, cx } from "@/lib/api";
@@ -16,6 +17,7 @@ import OwnerPanel from "@/pages/Owner";
 import AuditTrail from "@/pages/AuditTrail";
 import NotificationsBell from "@/pages/NotificationsBell";
 import OnboardingTour from "@/pages/OnboardingTour";
+import Settings from "@/pages/Settings";
 
 import "@/App.css";
 
@@ -27,6 +29,7 @@ const TABS_BASE = [
   ["master", "Master data", UserSquare2],
   ["imports", "Import data", FileSpreadsheet],
   ["audit", "Audit trail", History],
+  ["settings", "Settings", SettingsIcon],
 ];
 
 export default function App() {
@@ -77,6 +80,7 @@ export default function App() {
     master: "Master data",
     imports: "Import from Excel",
     audit: "Audit trail",
+    settings: "Account & security",
     approvals: "Team & approvals",
   }[tab];
 
@@ -157,6 +161,7 @@ export default function App() {
               : <div className="empty">Select or create a client before importing source data.</div>
           )}
           {tab === "audit" && <AuditTrail activeClient={active} />}
+          {tab === "settings" && <Settings user={user} onProfileUpdate={setUser} onToast={notify} />}
           {tab === "approvals" && <OwnerPanel onToast={notify} />}
         </div>
 
