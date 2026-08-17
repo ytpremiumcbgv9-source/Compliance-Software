@@ -20,6 +20,23 @@ export default function Dashboard({ user, activeClient }) {
     api.get("/reminders").then((r) => setReminders(r.data)).catch(() => setReminders([]));
   }, [activeClient?.id]);
 
+  const noClients = stats && stats.clients === 0;
+
+  if (noClients) {
+    return (
+      <div className="empty-hero" data-testid="dashboard-empty-hero">
+        <div>
+          <span className="eyebrow">GET STARTED IN 30 SECONDS</span>
+          <h2>Welcome to ComplyEase, {user.name?.split(" ")[0]}</h2>
+          <p>Your compliance operating system starts with one client company. Click the button below to open the tour, or jump straight into <b>Clients</b> and choose "Try with demo data" to see a fully populated workspace.</p>
+          <div style={{ display: "flex", gap: 10 }}>
+            <button className="button primary" data-testid="dashboard-restart-tour" onClick={() => window.complyEaseRestartTour?.()}>Show me the tour</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       <section className="metric-grid" data-testid="dashboard-metrics">

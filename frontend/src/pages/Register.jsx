@@ -145,7 +145,13 @@ export default function Register({ activeClient, onToast }) {
             )}
           </div>
         ))}
-        {!shown.length && <div className="empty">No obligations match. Use "Generate FY" to load the statutory calendar for a year.</div>}
+        {!shown.length && (
+          <div className="empty">
+            {items.length === 0
+              ? <>No obligations yet for this client. Pick a financial year above and click <b>Generate FY</b> to load the statutory calendar (15 filings) in one shot.</>
+              : "No obligations match your filter."}
+          </div>
+        )}
       </section>
     </>
   );

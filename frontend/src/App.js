@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   Building2, CalendarDays, CheckCircle2, ClipboardCheck, FileSpreadsheet,
-  History, LayoutDashboard, LogOut, Plus, ScrollText, ShieldCheck, UserSquare2, Users,
+  HelpCircle, History, LayoutDashboard, LogOut, Plus, ScrollText, ShieldCheck, UserSquare2, Users,
 } from "lucide-react";
 
 import { api, cx } from "@/lib/api";
@@ -15,6 +15,7 @@ import Registers from "@/pages/Registers";
 import OwnerPanel from "@/pages/Owner";
 import AuditTrail from "@/pages/AuditTrail";
 import NotificationsBell from "@/pages/NotificationsBell";
+import OnboardingTour from "@/pages/OnboardingTour";
 
 import "@/App.css";
 
@@ -122,6 +123,9 @@ export default function App() {
           </div>
           <div className="top-actions">
             <NotificationsBell onOpenClient={openClient} />
+            <button data-testid="help-restart-tour" className="notif-btn" title="Restart tour" onClick={() => window.complyEaseRestartTour?.()}>
+              <HelpCircle size={17} />
+            </button>
             <span className="date-chip"><CalendarDays size={15} /> {new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}</span>
             <div className="avatar" data-testid="user-avatar">{user.name?.slice(0, 2).toUpperCase()}</div>
           </div>
@@ -158,6 +162,11 @@ export default function App() {
 
         {toast && <div data-testid="toast-message" className="toast"><CheckCircle2 size={17} />{toast}</div>}
       </main>
+      <OnboardingTour
+        user={user}
+        onDemo={(c) => { refreshClients().then(() => setActive(c)); notify("Demo client ready — explore Sunrise Innovations"); }}
+        onNavigate={(t) => setTab(t)}
+      />
     </div>
   );
 }

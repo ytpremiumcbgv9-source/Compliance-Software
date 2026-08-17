@@ -838,6 +838,85 @@ async def reminders(user=Depends(current_user)):
     return rows[:200]
 
 
+@api.post("/clients/demo")
+async def create_demo_client(user=Depends(current_user)):
+    """One-click demo client: full workspace with directors, shareholders, obligations."""
+    count = await db.clients.count_documents({"owner_user_id": user["id"]})
+    limit = int(user.get("client_limit", 5))
+    if count >= limit:
+        raise HTTPException(403, f"Your plan allows {limit} clients. Delete one before creating the demo.")
+    client_id = str(uuid.uuid4())
+    fy_now = datetime.now(timezone.utc)
+    fy_start = fy_now.year if fy_now.month >= 4 else fy_now.year - 1
+    fy = f"{fy_start}-{str((fy_start + 1) % 100).zfill(2)}"
+    demo = {
+        "id": client_id,
+        "owner_user_id": user["id"],
+        "name": "Sunrise Innovations Pvt Ltd",
+        "code": "SUNRISE",
+        "cin": "U72900MH2022PTC198765",
+        "sector": "Private company",
+        "state": "Maharashtra",
+        "registered_address": "301, Andheri East, Mumbai 400069",
+        "incorporation_date": "2022-06-14",
+        "health": 76,
+        "created_at": now_iso(),
+        "is_demo": True,
+    }
+    await db.clients.insert_one(dict(demo))
+    # Directors
+    directors = [
+        {"name": "Ananya Kapoor", "din": "08123456", "designation": "Managing Director", "appointment_date": "2022-06-14", "kyc_status": "Filed", "email": "ananya@sunrise.co", "pan": "ABCPK1234A"},
+        {"name": "Rohit Menon", "din": "08234567", "designation": "Director", "appointment_date": "2022-06-14", "kyc_status": "Filed", "email": "rohit@sunrise.co", "pan": "ABCPM5678B"},
+        {"name": "Sara Iyer", "din": "08345678", "designation": "CFO", "appointment_date": "2023-04-01", "kyc_status": "Pending", "email": "sara@sunrise.co", "pan": "ABCPI9012C"},
+    ]
+    for d in directors:
+        await db.directors.insert_one({"id": str(uuid.uuid4()), "client_id": client_id, "created_at": now_iso(), "source": "demo", **d})
+    # Auditors
+    await db.auditors.insert_one({"id": str(uuid.uuid4()), "client_id": client_id, "created_at": now_iso(),
+                                   "firm_name": "Sharma & Associates LLP", "frn": "123456W", "appointment_date": "2023-08-15", "term_end_date": "2028-08-14"})
+    # Shareholders
+    shareholders = [
+        {"name": "Ananya Kapoor", "folio_no": "F-001", "shares_held": 60000, "share_class": "Equity", "date_of_holding": "2022-06-14"},
+        {"name": "Rohit Menon", "folio_no": "F-002", "shares_held": 30000, "share_class": "Equity", "date_of_holding": "2022-06-14"},
+        {"name": "Blume Ventures", "folio_no": "F-003", "shares_held": 10000, "share_class": "CCPS Series A", "date_of_holding": "2023-11-20"},
+    ]
+    for sh in shareholders:
+        await db.shareholders.insert_one({"id": str(uuid.uuid4()), "client_id": client_id, "created_at": now_iso(), **sh})
+    # A charge
+    await db.charges.insert_one({"id": str(uuid.uuid4()), "client_id": client_id, "created_at": now_iso(),
+                                  "charge_id": "CHG-001", "creation_date": "2023-03-11", "amount": 50000000,
+                                  "holder": "HDFC Bank Ltd", "description": "Working capital facility", "status": "Open"})
+    # A resolution
+    await db.resolutions.insert_one({"id": str(uuid.uuid4()), "client_id": client_id, "created_at": now_iso(),
+                                      "number": "BR-01/24", "passed_on": "2024-04-10",
+                                      "resolution_type": "Board", "subject": "Approval of annual financial statements", "filing_form": "AOC-4"})
+    # Financials
+    await db.financials.insert_one({"id": str(uuid.uuid4()), "client_id": client_id, "created_at": now_iso(),
+                                     "fy_end": "2025-03-31", "revenue": 45000000, "profit": 3200000,
+                                     "net_worth": 12800000, "paid_up_capital": 1000000, "borrowings": 45000000, "turnover": 45000000, "listed": False})
+    # Generate obligations for current FY
+    generated = 0
+    for rule in COMPLIANCE_RULES:
+        due = resolve_due(fy, rule)
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        status = "Overdue" if due < today else ("Due soon" if due <= (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%d") else "On track")
+        obligation = {
+            "id": str(uuid.uuid4()), "client_id": client_id, "code": rule["code"], "name": rule["name"],
+            "form": rule["form"], "section": rule["section"], "category": rule["category"],
+            "priority": rule["priority"], "risk": "Watch", "recurrence": rule["recurrence"],
+            "fy": fy, "due": due, "status": status, "assignee": "Unassigned",
+            "reviewer": None, "filed_date": None, "srn": None, "remarks": "",
+            "description": rule["description"], "created_at": now_iso(),
+        }
+        await db.obligations.insert_one(dict(obligation))
+        generated += 1
+    await log_audit(client_id, user, "client.demo_created",
+                    f"Demo client created with {generated} obligations, {len(directors)} directors, {len(shareholders)} shareholders", "client", client_id)
+    demo.pop("_id", None)
+    return {"client": demo, "obligations": generated, "directors": len(directors), "shareholders": len(shareholders)}
+
+
 # ---------------------------------------------------------------------------
 # Recurring compliance engine
 # ---------------------------------------------------------------------------
