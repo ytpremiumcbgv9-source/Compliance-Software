@@ -22,6 +22,21 @@ OWNER_EMAIL = "owner.1786939113@test.local"
 OWNER_PASSWORD = "OwnerPass!123"
 
 
+# Session-scoped: bump owner's client_limit directly in Mongo so parallel workers don't hit the quota.
+@pytest.fixture(scope="session", autouse=True)
+def _raise_owner_limit():
+    try:
+        from pymongo import MongoClient
+        backend_env = dotenv_values("/app/backend/.env")
+        mc = MongoClient(backend_env["MONGO_URL"], serverSelectionTimeoutMS=3000)
+        mc[backend_env["DB_NAME"]].users.update_one(
+            {"email": OWNER_EMAIL}, {"$set": {"client_limit": 50}}
+        )
+        mc.close()
+    except Exception as exc:  # pragma: no cover - purely a test-env optimisation
+        print(f"owner client_limit bump skipped: {exc}")
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -174,8 +189,15 @@ class TestClients:
 class TestObligations:
     def test_seed_and_status_update(self, owner_session, owner_client):
         cid = owner_client["id"]
+        # Fresh client should return [] before generate is called (no auto-seed)
+        pre = owner_session.get(f"{API}/clients/{cid}/obligations", timeout=20).json()
+        assert pre == [], f"expected empty obligations for fresh client, got {len(pre)}"
+        # Generate FY 2026-27 obligations from rules
+        gen = owner_session.post(f"{API}/clients/{cid}/generate-obligations",
+                                 json={"fy": "2026-27"}, timeout=30)
+        assert gen.status_code == 200
         rows = owner_session.get(f"{API}/clients/{cid}/obligations", timeout=20).json()
-        assert len(rows) >= 5
+        assert len(rows) == 15, f"expected 15 generated obligations, got {len(rows)}"
         row = rows[0]
         new_status = "Completed" if row["status"] != "Completed" else "On track"
         r = owner_session.patch(f"{API}/obligations/{row['id']}",
@@ -321,3 +343,249 @@ class TestPortfolio:
         assert isinstance(rows, list)
         if rows:
             assert "client_name" in rows[0] and "status" in rows[0]
+
+
+# ---------------------------------------------------------------------------
+# Recurring compliance engine — rules + generate-obligations
+# ---------------------------------------------------------------------------
+class TestRulesAndGenerate:
+    def test_rules_library_has_15_entries(self, owner_session):
+        r = owner_session.get(f"{API}/rules", timeout=20)
+        assert r.status_code == 200
+        rules = r.json()
+        assert len(rules) == 15, f"expected 15 rules, got {len(rules)}"
+        required_keys = {"code", "form", "section", "recurrence", "due_rule"}
+        for rule in rules:
+            missing = required_keys - set(rule.keys())
+            assert not missing, f"rule {rule.get('code')} missing {missing}"
+
+    def test_generate_fy_idempotent_and_due_dates(self, owner_session):
+        # Fresh client to guarantee created=15 on first call
+        unique = f"TEST_{uuid.uuid4().hex[:8]}"
+        c = owner_session.post(f"{API}/clients", json={"name": unique, "code": unique}, timeout=20).json()
+        cid = c["id"]
+        try:
+            r1 = owner_session.post(f"{API}/clients/{cid}/generate-obligations",
+                                    json={"fy": "2026-27"}, timeout=30)
+            assert r1.status_code == 200, r1.text
+            body1 = r1.json()
+            assert body1["created"] == 15 and body1["skipped"] == 0, body1
+
+            # Idempotency
+            r2 = owner_session.post(f"{API}/clients/{cid}/generate-obligations",
+                                    json={"fy": "2026-27"}, timeout=30)
+            assert r2.status_code == 200
+            body2 = r2.json()
+            assert body2["created"] == 0 and body2["skipped"] == 15, body2
+
+            # Due-date checks + carrier fields
+            rows = owner_session.get(f"{API}/clients/{cid}/obligations", timeout=20).json()
+            by_code = {row["code"]: row for row in rows if row.get("fy") == "2026-27"}
+            expectations = {
+                "DPT-3": "2026-06-30",
+                "DIR-3-KYC": "2027-09-30",
+                "MGT-7": "2027-05-30",
+                "MSME-1-H1": "2026-10-31",
+                "BM-Q1": "2026-06-30",
+            }
+            for code, expected_due in expectations.items():
+                row = by_code.get(code)
+                assert row, f"missing obligation {code}"
+                assert row["due"] == expected_due, f"{code} due {row['due']} != {expected_due}"
+                assert row["fy"] == "2026-27"
+                assert row["recurrence"] in ("annual", "half-yearly", "quarterly")
+        finally:
+            owner_session.delete(f"{API}/clients/{cid}", timeout=20)
+
+
+# ---------------------------------------------------------------------------
+# Statutory registers
+# ---------------------------------------------------------------------------
+class TestStatutoryRegisters:
+    def test_registers_crud_and_list(self, owner_session, owner_client):
+        cid = owner_client["id"]
+
+        # Shareholder
+        s = owner_session.post(f"{API}/clients/{cid}/shareholders",
+                               json={"name": "TEST Holder", "folio_no": "F001", "shares_held": 100},
+                               timeout=20)
+        assert s.status_code == 200
+        sh_id = s.json()["id"]
+
+        # Charge
+        ch = owner_session.post(f"{API}/clients/{cid}/charges",
+                                json={"holder": "TEST Bank", "amount": 500000,
+                                      "creation_date": "2025-04-01"}, timeout=20)
+        assert ch.status_code == 200
+        ch_id = ch.json()["id"]
+
+        # Resolution
+        rz = owner_session.post(f"{API}/clients/{cid}/resolutions",
+                                json={"number": "R-01", "subject": "TEST Res",
+                                      "resolution_type": "Board"}, timeout=20)
+        assert rz.status_code == 200
+        rz_id = rz.json()["id"]
+
+        # Contract
+        co = owner_session.post(f"{API}/clients/{cid}/contracts",
+                                json={"counterparty": "TEST Vendor Ltd"}, timeout=20)
+        assert co.status_code == 200
+        co_id = co.json()["id"]
+
+        # List all registers
+        regs = owner_session.get(f"{API}/clients/{cid}/registers", timeout=20).json()
+        keys = {r["key"]: r["count"] for r in regs}
+        for expected in ("directors", "shareholders", "charges", "resolutions", "contracts", "auditors"):
+            assert expected in keys, f"missing register {expected}"
+        assert keys["shareholders"] >= 1
+        assert keys["charges"] >= 1
+        assert keys["resolutions"] >= 1
+        assert keys["contracts"] >= 1
+
+        # CSV download
+        csv_r = owner_session.get(f"{API}/clients/{cid}/registers/shareholders.csv", timeout=20)
+        assert csv_r.status_code == 200
+        assert "text/csv" in csv_r.headers.get("content-type", "")
+        text = csv_r.text
+        assert owner_client["name"] in text  # company header
+        assert "TEST Holder" in text
+
+        # Delete each
+        for path, item_id in [
+            ("shareholders", sh_id), ("charges", ch_id),
+            ("resolutions", rz_id), ("contracts", co_id),
+        ]:
+            d = owner_session.delete(f"{API}/clients/{cid}/{path}/{item_id}", timeout=20)
+            assert d.status_code == 200, path
+
+        # Audit log entries
+        log = owner_session.get(f"{API}/clients/{cid}/audit-log", timeout=20).json()
+        actions = {row["action"] for row in log}
+        assert {"shareholder.added", "charge.added", "resolution.added", "contract.added"}.issubset(actions)
+
+
+# ---------------------------------------------------------------------------
+# Notifications
+# ---------------------------------------------------------------------------
+class TestNotifications:
+    def test_notifications_buckets_and_dismiss(self, owner_session):
+        # Generate a fresh FY on a scratch client with an in-past due (2024-25 fy => several overdue)
+        unique = f"TEST_{uuid.uuid4().hex[:8]}"
+        create = owner_session.post(f"{API}/clients", json={"name": unique, "code": unique}, timeout=20)
+        assert create.status_code == 200, create.text
+        c = create.json()
+        cid = c["id"]
+        try:
+            owner_session.post(f"{API}/clients/{cid}/generate-obligations",
+                               json={"fy": "2024-25"}, timeout=30)
+            r = owner_session.get(f"{API}/notifications", timeout=20)
+            assert r.status_code == 200
+            data = r.json()
+            assert set(data["counts"].keys()) == {"overdue", "t1", "t7", "t30"}
+            assert isinstance(data["items"], list)
+            # find at least one overdue from the 2024-25 FY
+            past_items = [i for i in data["items"]
+                          if i.get("client_id") == cid and i["bucket"] == "overdue"]
+            assert past_items, "expected overdue notifications for old FY"
+            first = past_items[0]
+            for k in ("client_name", "form", "name", "due", "days", "bucket", "tone", "status"):
+                assert k in first, f"missing field {k}"
+            assert first["days"] < 0
+
+            # Dismiss removes item for this user
+            ob_id = first["id"]
+            d = owner_session.post(f"{API}/notifications/{ob_id}/dismiss", timeout=20)
+            assert d.status_code == 200
+            after = owner_session.get(f"{API}/notifications", timeout=20).json()
+            assert not any(i["id"] == ob_id for i in after["items"]), "dismissed item still visible"
+        finally:
+            owner_session.delete(f"{API}/clients/{cid}", timeout=20)
+
+
+# ---------------------------------------------------------------------------
+# Maker-checker
+# ---------------------------------------------------------------------------
+class TestMakerChecker:
+    def test_submit_and_owner_can_approve_own(self, owner_session):
+        # Fresh client + generate obligations
+        unique = f"TEST_{uuid.uuid4().hex[:8]}"
+        c = owner_session.post(f"{API}/clients", json={"name": unique, "code": unique}, timeout=20).json()
+        cid = c["id"]
+        try:
+            owner_session.post(f"{API}/clients/{cid}/generate-obligations",
+                               json={"fy": "2026-27"}, timeout=30)
+            rows = owner_session.get(f"{API}/clients/{cid}/obligations", timeout=20).json()
+            row = next(r for r in rows if r["code"] == "MGT-7")
+            ob_id = row["id"]
+
+            # Assign to Priya first
+            up = owner_session.patch(f"{API}/obligations/{ob_id}",
+                                     json={"assignee": "Priya"}, timeout=20)
+            assert up.status_code == 200
+            assert up.json()["assignee"] == "Priya"
+
+            # Submit
+            s = owner_session.patch(f"{API}/obligations/{ob_id}/submit",
+                                    json={"remarks": "please review"}, timeout=20)
+            assert s.status_code == 200, s.text
+            body = s.json()
+            assert body["status"] == "Ready for review"
+            assert body.get("submitted_by")
+
+            # Owner reviewing own submission is allowed
+            rev = owner_session.patch(f"{API}/obligations/{ob_id}/review",
+                                      json={"approved": True, "remarks": "ok"}, timeout=20)
+            assert rev.status_code == 200, rev.text
+            assert rev.json()["status"] == "Approved"
+
+            # Second review call must 400 because status no longer "Ready for review"
+            rev2 = owner_session.patch(f"{API}/obligations/{ob_id}/review",
+                                       json={"approved": True}, timeout=20)
+            assert rev2.status_code == 400, rev2.text
+
+            # Audit log for submitted + approved
+            log = owner_session.get(f"{API}/clients/{cid}/audit-log", timeout=20).json()
+            actions = {row["action"] for row in log}
+            assert {"obligations.generated", "obligation.submitted",
+                    "obligation.approved"}.issubset(actions), actions
+        finally:
+            owner_session.delete(f"{API}/clients/{cid}", timeout=20)
+
+    def test_member_cannot_review_own_submission(self, owner_session):
+        """Non-owner submitter cannot review their own submission."""
+        # Create + approve a fresh member
+        email = f"TEST_{uuid.uuid4().hex[:8]}@test.local"
+        pw = "MemberPass!123"
+        signup = requests.post(f"{API}/auth/signup", json={
+            "name": "TEST Member Chk", "email": email, "password": pw,
+            "practice_name": "TEST Firm"}, timeout=20)
+        assert signup.status_code == 200
+        uid = signup.json()["user"]["id"]
+        owner_session.patch(f"{API}/owner/requests/{uid}",
+                            json={"approved": True, "client_limit": 3}, timeout=20)
+
+        member = requests.Session()
+        assert member.post(f"{API}/auth/login",
+                           json={"email": email, "password": pw}, timeout=20).status_code == 200
+
+        # Member creates a client + generates + submits
+        unique = f"TEST_{uuid.uuid4().hex[:8]}"
+        c = member.post(f"{API}/clients", json={"name": unique, "code": unique}, timeout=20).json()
+        cid = c["id"]
+        try:
+            member.post(f"{API}/clients/{cid}/generate-obligations",
+                        json={"fy": "2026-27"}, timeout=30)
+            rows = member.get(f"{API}/clients/{cid}/obligations", timeout=20).json()
+            ob_id = next(r for r in rows if r["code"] == "AOC-4")["id"]
+            s = member.patch(f"{API}/obligations/{ob_id}/submit", json={}, timeout=20)
+            assert s.status_code == 200
+            # Same member tries to review own → 403
+            r = member.patch(f"{API}/obligations/{ob_id}/review",
+                             json={"approved": True}, timeout=20)
+            assert r.status_code == 403, r.text
+        finally:
+            member.delete(f"{API}/clients/{cid}", timeout=20)
+            # Suspend the member so they no longer clutter listings
+            owner_session.patch(f"{API}/owner/users/{uid}/status",
+                                json={"status": "suspended"}, timeout=20)
+

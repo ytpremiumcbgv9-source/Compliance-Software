@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
-  Activity, Building2, CalendarDays, CheckCircle2, ClipboardCheck,
-  FileSpreadsheet, History, LayoutDashboard, LogOut, Plus, ShieldCheck, UserSquare2, Users,
+  Building2, CalendarDays, CheckCircle2, ClipboardCheck, FileSpreadsheet,
+  History, LayoutDashboard, LogOut, Plus, ScrollText, ShieldCheck, UserSquare2, Users,
 } from "lucide-react";
 
 import { api, cx } from "@/lib/api";
@@ -11,8 +11,10 @@ import Register from "@/pages/Register";
 import Clients from "@/pages/Clients";
 import ImportWizard from "@/pages/ImportWizard";
 import MasterData from "@/pages/MasterData";
+import Registers from "@/pages/Registers";
 import OwnerPanel from "@/pages/Owner";
 import AuditTrail from "@/pages/AuditTrail";
+import NotificationsBell from "@/pages/NotificationsBell";
 
 import "@/App.css";
 
@@ -20,6 +22,7 @@ const TABS_BASE = [
   ["dashboard", "Overview", LayoutDashboard],
   ["clients", "Clients", Building2],
   ["register", "Register", ClipboardCheck],
+  ["registers", "Statutory registers", ScrollText],
   ["master", "Master data", UserSquare2],
   ["imports", "Import data", FileSpreadsheet],
   ["audit", "Audit trail", History],
@@ -41,7 +44,7 @@ export default function App() {
   const refreshClients = () =>
     api.get("/clients").then((r) => {
       setClients(r.data);
-      if (!active && r.data.length) setActive(r.data[0]);
+      setActive((prev) => prev ? (r.data.find((c) => c.id === prev.id) || r.data[0] || null) : (r.data[0] || null));
     }).catch(() => {});
 
   useEffect(() => { if (user) refreshClients(); /* eslint-disable-next-line */ }, [user]);
@@ -69,15 +72,18 @@ export default function App() {
     dashboard: `Good morning, ${user.name?.split(" ")[0]}`,
     clients: "Client workspaces",
     register: "Compliance register",
+    registers: "Statutory registers",
     master: "Master data",
     imports: "Import from Excel",
     audit: "Audit trail",
     approvals: "Team & approvals",
   }[tab];
 
-  const bumpMaster = () => setMasterRefresh((v) => v + 1);
-
   const notify = (msg) => setToast(msg);
+  const openClient = (cid) => {
+    const found = clients.find((c) => c.id === cid);
+    if (found) { setActive(found); setTab("register"); }
+  };
 
   return (
     <div className="shell">
@@ -115,6 +121,7 @@ export default function App() {
             </div>
           </div>
           <div className="top-actions">
+            <NotificationsBell onOpenClient={openClient} />
             <span className="date-chip"><CalendarDays size={15} /> {new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}</span>
             <div className="avatar" data-testid="user-avatar">{user.name?.slice(0, 2).toUpperCase()}</div>
           </div>
@@ -123,9 +130,7 @@ export default function App() {
         <div className="content">
           <div className="page-head">
             <div>
-              <div className="eyebrow">
-                {user.role === "owner" ? "MASTER OWNER" : "APPROVED MEMBER"} / {active?.code || "SETUP"}
-              </div>
+              <div className="eyebrow">{user.role === "owner" ? "MASTER OWNER" : "APPROVED MEMBER"} / {active?.code || "SETUP"}</div>
               <h1 data-testid="page-title">{tabTitle}</h1>
               <p data-testid="active-client-name">
                 {active?.name || "Create your first client workspace"}
@@ -138,21 +143,13 @@ export default function App() {
           </div>
 
           {tab === "dashboard" && <Dashboard user={user} activeClient={active} />}
-          {tab === "clients" && (
-            <Clients
-              clients={clients} setActive={setActive}
-              onCreated={() => refreshClients()} user={user}
-            />
-          )}
-          {tab === "register" && (
-            active
-              ? <Register activeClient={active} onToast={notify} />
-              : <div className="empty">Select or create a client to open the register.</div>
-          )}
+          {tab === "clients" && <Clients clients={clients} setActive={setActive} onCreated={() => refreshClients()} user={user} />}
+          {tab === "register" && <Register activeClient={active} onToast={notify} />}
+          {tab === "registers" && <Registers activeClient={active} onToast={notify} />}
           {tab === "master" && <MasterData activeClient={active} onToast={notify} refreshToken={masterRefresh} />}
           {tab === "imports" && (
             active
-              ? <ImportWizard activeClient={active} onToast={notify} refreshMasterCounts={bumpMaster} />
+              ? <ImportWizard activeClient={active} onToast={notify} refreshMasterCounts={() => setMasterRefresh((v) => v + 1)} />
               : <div className="empty">Select or create a client before importing source data.</div>
           )}
           {tab === "audit" && <AuditTrail activeClient={active} />}

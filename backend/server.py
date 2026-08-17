@@ -127,6 +127,60 @@ class FinancialsIn(BaseModel):
     listed: bool = False
 
 
+class ShareholderIn(BaseModel):
+    name: str
+    folio_no: Optional[str] = None
+    pan: Optional[str] = None
+    shares_held: Optional[float] = 0
+    share_class: str = "Equity"
+    date_of_holding: Optional[str] = None
+    email: Optional[str] = None
+
+
+class ChargeIn(BaseModel):
+    charge_id: Optional[str] = None
+    creation_date: Optional[str] = None
+    amount: Optional[float] = 0
+    holder: str
+    description: Optional[str] = None
+    status: str = "Open"
+    modification_date: Optional[str] = None
+    satisfaction_date: Optional[str] = None
+
+
+class ResolutionIn(BaseModel):
+    number: str
+    passed_on: Optional[str] = None
+    resolution_type: str = "Board"  # Board | Special | Ordinary | Circular
+    subject: str
+    body: Optional[str] = None
+    filing_form: Optional[str] = None
+
+
+class ContractIn(BaseModel):
+    counterparty: str
+    relationship: str = "Related party"
+    nature: Optional[str] = None
+    value: Optional[float] = 0
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    approval_reference: Optional[str] = None
+
+
+class GenerateFyIn(BaseModel):
+    fy: str  # e.g. "2026-27"
+    incorporation_only: bool = False
+
+
+class SubmitIn(BaseModel):
+    remarks: Optional[str] = None
+
+
+class ReviewIn(BaseModel):
+    approved: bool
+    remarks: Optional[str] = None
+
+
 class ImportApplyRow(BaseModel):
     """One target record + the sheet row it came from."""
     values: Dict[str, Any]
@@ -141,29 +195,111 @@ class ImportApply(BaseModel):
 # ---------------------------------------------------------------------------
 # Seed data
 # ---------------------------------------------------------------------------
-SEED_OBLIGATIONS = [
-    {"name": "Annual return filing", "form": "MGT-7", "section": "92", "category": "Annual filing",
-     "due": "2026-09-30", "assignee": "Unassigned", "status": "Due soon", "priority": "High",
-     "risk": "Watch", "description": "Annual return with prescribed particulars and financial disclosures."},
-    {"name": "Financial statements filing", "form": "AOC-4", "section": "137", "category": "Annual filing",
-     "due": "2026-10-29", "assignee": "Unassigned", "status": "On track", "priority": "Critical",
-     "risk": "Low", "description": "File adopted financial statements with the Registrar."},
-    {"name": "Director KYC", "form": "DIR-3 KYC", "section": "164", "category": "Directors",
-     "due": "2026-09-30", "assignee": "Unassigned", "status": "Overdue", "priority": "Critical",
-     "risk": "High", "description": "Complete annual KYC for every active director."},
-    {"name": "Board meetings", "form": "BM Calendar", "section": "173", "category": "Governance",
-     "due": "2026-06-30", "assignee": "Unassigned", "status": "Under review", "priority": "Medium",
-     "risk": "Watch", "description": "Maintain the required meeting cadence and minutes."},
-    {"name": "Auditor appointment", "form": "ADT-1", "section": "139", "category": "Audit",
-     "due": "2026-07-14", "assignee": "Unassigned", "status": "On track", "priority": "High",
-     "risk": "Low", "description": "Record auditor appointment and retain consent evidence."},
-    {"name": "DPT-3 return", "form": "DPT-3", "section": "73", "category": "Deposits",
-     "due": "2026-06-30", "assignee": "Unassigned", "status": "On track", "priority": "Medium",
-     "risk": "Watch", "description": "Return of deposits and outstanding money not treated as deposits."},
-    {"name": "MSME-1 half-yearly", "form": "MSME-1", "section": "405", "category": "MSME",
-     "due": "2026-10-31", "assignee": "Unassigned", "status": "On track", "priority": "Medium",
-     "risk": "Low", "description": "Half-yearly return of outstanding MSME payments beyond 45 days."},
+def _fy_end_year(fy: str) -> int:
+    """'2026-27' -> 2027"""
+    parts = fy.split("-")
+    return int("20" + parts[1]) if len(parts[1]) == 2 else int(parts[1])
+
+
+def _fy_start_year(fy: str) -> int:
+    return int(fy.split("-")[0])
+
+
+def _iso(y: int, m: int, d: int) -> str:
+    return f"{y:04d}-{m:02d}-{d:02d}"
+
+
+# Compliance rule library — the recurring engine.
+# offset semantics: "fy_end+Nd" => (fy_end + N days); "fixed:m-d" => that date in FY end year;
+# "half1:m-d" / "half2:m-d" => two occurrences per FY on the given dates.
+COMPLIANCE_RULES = [
+    {"code": "MGT-7", "name": "Annual return", "form": "MGT-7", "section": "92",
+     "category": "Annual filing", "priority": "High", "recurrence": "annual",
+     "due_rule": "fy_end+60d",
+     "description": "Annual return with directors, shareholders and other prescribed particulars."},
+    {"code": "AOC-4", "name": "Financial statements", "form": "AOC-4", "section": "137",
+     "category": "Annual filing", "priority": "Critical", "recurrence": "annual",
+     "due_rule": "fy_end+30d_after_agm",
+     "description": "File adopted financial statements with the Registrar within 30 days of AGM."},
+    {"code": "DIR-3-KYC", "name": "Director KYC", "form": "DIR-3 KYC", "section": "153",
+     "category": "Directors", "priority": "Critical", "recurrence": "annual",
+     "due_rule": "fixed:09-30",
+     "description": "Complete annual KYC for every active director holding a DIN as on 31 March."},
+    {"code": "ADT-1", "name": "Auditor appointment", "form": "ADT-1", "section": "139",
+     "category": "Audit", "priority": "High", "recurrence": "annual",
+     "due_rule": "fy_end+15d",
+     "description": "Intimation of appointment / reappointment of statutory auditor."},
+    {"code": "DPT-3", "name": "Return of deposits", "form": "DPT-3", "section": "73",
+     "category": "Deposits", "priority": "Medium", "recurrence": "annual",
+     "due_rule": "half1:06-30",
+     "description": "Return of deposits and outstanding money not treated as deposits."},
+    {"code": "MSME-1-H1", "name": "MSME outstanding return (Apr–Sep)", "form": "MSME-1",
+     "section": "405", "category": "MSME", "priority": "Medium", "recurrence": "half-yearly",
+     "due_rule": "half1:10-31",
+     "description": "Half-yearly return of MSME outstanding beyond 45 days (Apr–Sep window)."},
+    {"code": "MSME-1-H2", "name": "MSME outstanding return (Oct–Mar)", "form": "MSME-1",
+     "section": "405", "category": "MSME", "priority": "Medium", "recurrence": "half-yearly",
+     "due_rule": "half2:04-30",
+     "description": "Half-yearly return of MSME outstanding beyond 45 days (Oct–Mar window)."},
+    {"code": "AGM", "name": "Hold Annual General Meeting", "form": "AGM", "section": "96",
+     "category": "Governance", "priority": "Critical", "recurrence": "annual",
+     "due_rule": "fixed:09-30",
+     "description": "AGM to be held on or before 30 September of the following FY."},
+    {"code": "BM-Q1", "name": "Board meeting — Q1", "form": "BM", "section": "173",
+     "category": "Governance", "priority": "Medium", "recurrence": "quarterly",
+     "due_rule": "quarter:1:06-30",
+     "description": "Board meeting for the first quarter of the FY."},
+    {"code": "BM-Q2", "name": "Board meeting — Q2", "form": "BM", "section": "173",
+     "category": "Governance", "priority": "Medium", "recurrence": "quarterly",
+     "due_rule": "quarter:2:09-30",
+     "description": "Board meeting for the second quarter of the FY."},
+    {"code": "BM-Q3", "name": "Board meeting — Q3", "form": "BM", "section": "173",
+     "category": "Governance", "priority": "Medium", "recurrence": "quarterly",
+     "due_rule": "quarter:3:12-31",
+     "description": "Board meeting for the third quarter of the FY."},
+    {"code": "BM-Q4", "name": "Board meeting — Q4", "form": "BM", "section": "173",
+     "category": "Governance", "priority": "Medium", "recurrence": "quarterly",
+     "due_rule": "quarter:4:03-31",
+     "description": "Board meeting for the fourth quarter of the FY."},
+    {"code": "CSR-2", "name": "CSR report", "form": "CSR-2", "section": "135",
+     "category": "CSR", "priority": "Medium", "recurrence": "annual",
+     "due_rule": "fy_end+90d",
+     "description": "CSR reporting for eligible companies, filed as an addendum to AOC-4."},
+    {"code": "MBP-1", "name": "Directors' disclosure of interest", "form": "MBP-1",
+     "section": "184", "category": "Directors", "priority": "High", "recurrence": "annual",
+     "due_rule": "quarter:1:04-30",
+     "description": "Disclosure of interest by every director at the first board meeting of the FY."},
+    {"code": "IEPF-2", "name": "Unclaimed dividend statement", "form": "IEPF-2",
+     "section": "125", "category": "IEPF", "priority": "Medium", "recurrence": "annual",
+     "due_rule": "fixed:09-30",
+     "description": "Statement of unclaimed and unpaid amounts within 60 days of the AGM."},
 ]
+
+
+def resolve_due(fy: str, rule: dict) -> str:
+    end_y = _fy_end_year(fy)
+    start_y = _fy_start_year(fy)
+    fy_end = datetime(end_y, 3, 31)
+    dr = rule["due_rule"]
+    if dr.startswith("fy_end+"):
+        n = int("".join(ch for ch in dr.split("+")[1] if ch.isdigit()))
+        due = fy_end + timedelta(days=n)
+        return due.strftime("%Y-%m-%d")
+    if dr.startswith("fixed:"):
+        m, d = dr.split(":")[1].split("-")
+        return _iso(end_y, int(m), int(d))
+    if dr.startswith("half1:"):
+        m, d = dr.split(":")[1].split("-")
+        return _iso(start_y, int(m), int(d))
+    if dr.startswith("half2:"):
+        m, d = dr.split(":")[1].split("-")
+        return _iso(end_y, int(m), int(d))
+    if dr.startswith("quarter:"):
+        _, q, md = dr.split(":")
+        m, d = md.split("-")
+        year = start_y if int(m) >= 4 else end_y
+        return _iso(year, int(m), int(d))
+    return fy_end.strftime("%Y-%m-%d")
 
 TARGET_FIELDS = {
     "directors": ["name", "din", "designation", "appointment_date", "cessation_date",
@@ -475,13 +611,6 @@ async def delete_client(client_id: str, user=Depends(current_user)):
 async def get_obligations(client_id: str, user=Depends(current_user)):
     await ensure_owned_client(client_id, user)
     rows = await db.obligations.find({"client_id": client_id}, {"_id": 0}).to_list(500)
-    if not rows:
-        rows = [{
-            **item, "id": str(uuid.uuid4()), "client_id": client_id,
-            "filed_date": None, "srn": None, "remarks": "",
-        } for item in SEED_OBLIGATIONS]
-        await db.obligations.insert_many([dict(x) for x in rows])
-        rows = await db.obligations.find({"client_id": client_id}, {"_id": 0}).to_list(500)
     return rows
 
 
@@ -710,6 +839,239 @@ async def reminders(user=Depends(current_user)):
 
 
 # ---------------------------------------------------------------------------
+# Recurring compliance engine
+# ---------------------------------------------------------------------------
+@api.get("/rules")
+async def list_rules(user=Depends(current_user)):
+    return COMPLIANCE_RULES
+
+
+@api.post("/clients/{client_id}/generate-obligations")
+async def generate_fy_obligations(client_id: str, payload: GenerateFyIn, user=Depends(current_user)):
+    await ensure_owned_client(client_id, user)
+    created, skipped = 0, 0
+    for rule in COMPLIANCE_RULES:
+        exists = await db.obligations.find_one({
+            "client_id": client_id,
+            "form": rule["form"],
+            "section": rule["section"],
+            "fy": payload.fy,
+            "code": rule["code"],
+        })
+        if exists:
+            skipped += 1
+            continue
+        due = resolve_due(payload.fy, rule)
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        status = "Overdue" if due < today else ("Due soon" if due <= (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%d") else "On track")
+        item = {
+            "id": str(uuid.uuid4()),
+            "client_id": client_id,
+            "code": rule["code"],
+            "name": rule["name"],
+            "form": rule["form"],
+            "section": rule["section"],
+            "category": rule["category"],
+            "priority": rule["priority"],
+            "risk": "Watch",
+            "recurrence": rule["recurrence"],
+            "fy": payload.fy,
+            "due": due,
+            "status": status,
+            "assignee": "Unassigned",
+            "reviewer": None,
+            "filed_date": None,
+            "srn": None,
+            "remarks": "",
+            "description": rule["description"],
+            "created_at": now_iso(),
+        }
+        await db.obligations.insert_one(dict(item))
+        created += 1
+    if created:
+        await log_audit(client_id, user, "obligations.generated",
+                        f"Generated {created} obligations for FY {payload.fy}", "obligation", "")
+    return {"created": created, "skipped": skipped, "fy": payload.fy}
+
+
+# ---------------------------------------------------------------------------
+# Statutory registers (additional master data)
+# ---------------------------------------------------------------------------
+list_shareholders, add_shareholder, remove_shareholder = _master_router("shareholders", ShareholderIn, "shareholder")
+list_charges, add_charge, remove_charge = _master_router("charges", ChargeIn, "charge")
+list_resolutions, add_resolution, remove_resolution = _master_router("resolutions", ResolutionIn, "resolution")
+list_contracts, add_contract, remove_contract = _master_router("contracts", ContractIn, "contract")
+
+for _entity in ("shareholders", "charges", "resolutions", "contracts"):
+    _list_fn = {"shareholders": list_shareholders, "charges": list_charges,
+                "resolutions": list_resolutions, "contracts": list_contracts}[_entity]
+    _add_fn = {"shareholders": add_shareholder, "charges": add_charge,
+               "resolutions": add_resolution, "contracts": add_contract}[_entity]
+    _del_fn = {"shareholders": remove_shareholder, "charges": remove_charge,
+               "resolutions": remove_resolution, "contracts": remove_contract}[_entity]
+    api.add_api_route(f"/clients/{{client_id}}/{_entity}", _list_fn, methods=["GET"])
+    api.add_api_route(f"/clients/{{client_id}}/{_entity}", _add_fn, methods=["POST"])
+    api.add_api_route(f"/clients/{{client_id}}/{_entity}/{{item_id}}", _del_fn, methods=["DELETE"])
+
+
+REGISTER_MAP = {
+    "directors": ("Register of Directors and KMP (MBP-1)",
+                  ["name", "din", "designation", "appointment_date", "cessation_date", "kyc_status", "email", "pan"]),
+    "shareholders": ("Register of Members (MGT-1)",
+                     ["name", "folio_no", "pan", "shares_held", "share_class", "date_of_holding", "email"]),
+    "charges": ("Register of Charges (Section 85)",
+                ["charge_id", "creation_date", "amount", "holder", "description", "status", "modification_date", "satisfaction_date"]),
+    "resolutions": ("Register of Board & General Meeting Resolutions",
+                    ["number", "passed_on", "resolution_type", "subject", "body", "filing_form"]),
+    "contracts": ("Register of Contracts (MBP-4)",
+                  ["counterparty", "relationship", "nature", "value", "start_date", "end_date", "approval_reference"]),
+    "auditors": ("Register of Auditor Appointments",
+                 ["firm_name", "frn", "appointment_date", "term_end_date", "email", "pan"]),
+}
+
+
+@api.get("/clients/{client_id}/registers/{register}.csv")
+async def download_register(client_id: str, register: str, user=Depends(current_user)):
+    from fastapi.responses import StreamingResponse
+    import csv
+    client = await ensure_owned_client(client_id, user)
+    if register not in REGISTER_MAP:
+        raise HTTPException(404, "Unknown register")
+    title, fields = REGISTER_MAP[register]
+    rows = await db[register].find({"client_id": client_id}, {"_id": 0}).to_list(1000)
+    buf = io.StringIO()
+    buf.write(f"{title}\nCompany: {client['name']}\nCIN: {client.get('cin') or 'N/A'}\nGenerated: {now_iso()}\n\n")
+    writer = csv.writer(buf)
+    writer.writerow([f.replace("_", " ").title() for f in fields])
+    for row in rows:
+        writer.writerow([row.get(f, "") for f in fields])
+    buf.seek(0)
+    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv", headers={
+        "Content-Disposition": f'attachment; filename="{register}-{client["code"]}.csv"',
+    })
+
+
+@api.get("/clients/{client_id}/registers")
+async def list_registers(client_id: str, user=Depends(current_user)):
+    await ensure_owned_client(client_id, user)
+    out = []
+    for key, (title, fields) in REGISTER_MAP.items():
+        count = await db[key].count_documents({"client_id": client_id})
+        out.append({"key": key, "title": title, "fields": fields, "count": count})
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Notifications (T-30 / T-7 / T-1 / Overdue)
+# ---------------------------------------------------------------------------
+@api.get("/notifications")
+async def notifications(user=Depends(current_user)):
+    clients = await db.clients.find({"owner_user_id": user["id"]}, {"_id": 0}).to_list(500)
+    client_map = {c["id"]: c for c in clients}
+    if not client_map:
+        return {"items": [], "counts": {"overdue": 0, "t1": 0, "t7": 0, "t30": 0}}
+    rows = await db.obligations.find(
+        {"client_id": {"$in": list(client_map)}, "status": {"$nin": ["Completed", "Approved"]}},
+        {"_id": 0},
+    ).to_list(2000)
+    today = datetime.now(timezone.utc).date()
+    items, counts = [], {"overdue": 0, "t1": 0, "t7": 0, "t30": 0}
+    dismissed = set()
+    async for d in db.notifications_dismissed.find({"user_id": user["id"]}, {"_id": 0, "obligation_id": 1}):
+        dismissed.add(d["obligation_id"])
+    for row in rows:
+        if row["id"] in dismissed or not row.get("due"):
+            continue
+        try:
+            due = datetime.strptime(row["due"], "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        delta = (due - today).days
+        if delta < 0:
+            bucket, tone = "overdue", "danger"
+        elif delta <= 1:
+            bucket, tone = "t1", "danger"
+        elif delta <= 7:
+            bucket, tone = "t7", "warning"
+        elif delta <= 30:
+            bucket, tone = "t30", "warning"
+        else:
+            continue
+        counts[bucket] += 1
+        client = client_map.get(row["client_id"], {})
+        items.append({
+            "id": row["id"],
+            "client_name": client.get("name", ""),
+            "client_id": row["client_id"],
+            "form": row["form"],
+            "name": row["name"],
+            "due": row["due"],
+            "days": delta,
+            "bucket": bucket,
+            "tone": tone,
+            "assignee": row.get("assignee"),
+            "status": row["status"],
+        })
+    items.sort(key=lambda x: x["days"])
+    return {"items": items[:100], "counts": counts}
+
+
+@api.post("/notifications/{obligation_id}/dismiss")
+async def dismiss_notification(obligation_id: str, user=Depends(current_user)):
+    await db.notifications_dismissed.update_one(
+        {"user_id": user["id"], "obligation_id": obligation_id},
+        {"$set": {"dismissed_at": now_iso()}},
+        upsert=True,
+    )
+    return {"message": "Dismissed"}
+
+
+# ---------------------------------------------------------------------------
+# Maker-checker workflow
+# ---------------------------------------------------------------------------
+@api.patch("/obligations/{obligation_id}/submit")
+async def submit_for_review(obligation_id: str, payload: SubmitIn, user=Depends(current_user)):
+    row = await db.obligations.find_one({"id": obligation_id}, {"_id": 0})
+    if not row:
+        raise HTTPException(404, "Obligation not found")
+    await ensure_owned_client(row["client_id"], user)
+    if row.get("assignee") and row["assignee"] not in ("Unassigned", user["name"], user["email"]):
+        # allow anyway but log — owners often need to submit on behalf of team
+        pass
+    await db.obligations.update_one(
+        {"id": obligation_id},
+        {"$set": {"status": "Ready for review", "submitted_by": user["name"],
+                  "submitted_at": now_iso(), "review_remarks": payload.remarks or ""}},
+    )
+    await log_audit(row["client_id"], user, "obligation.submitted",
+                    f"Submitted {row['form']} for review", "obligation", obligation_id)
+    return strip(await db.obligations.find_one({"id": obligation_id}, {"_id": 0}))
+
+
+@api.patch("/obligations/{obligation_id}/review")
+async def review_obligation(obligation_id: str, payload: ReviewIn, user=Depends(current_user)):
+    row = await db.obligations.find_one({"id": obligation_id}, {"_id": 0})
+    if not row:
+        raise HTTPException(404, "Obligation not found")
+    await ensure_owned_client(row["client_id"], user)
+    if row.get("status") != "Ready for review":
+        raise HTTPException(400, "Only obligations submitted for review can be actioned")
+    if row.get("submitted_by") == user["name"] and user.get("role") != "owner":
+        raise HTTPException(403, "The submitter cannot be their own reviewer")
+    new_status = "Approved" if payload.approved else "Rework"
+    await db.obligations.update_one(
+        {"id": obligation_id},
+        {"$set": {"status": new_status, "reviewed_by": user["name"],
+                  "reviewed_at": now_iso(), "review_remarks": payload.remarks or ""}},
+    )
+    await log_audit(row["client_id"], user,
+                    "obligation.approved" if payload.approved else "obligation.rework",
+                    f"{'Approved' if payload.approved else 'Sent back for rework'}: {row['form']}",
+                    "obligation", obligation_id)
+    return strip(await db.obligations.find_one({"id": obligation_id}, {"_id": 0}))
+
+
+# ---------------------------------------------------------------------------
 # Mount
 # ---------------------------------------------------------------------------
 app.include_router(api)
@@ -729,6 +1091,8 @@ async def indexes():
     await db.clients.create_index("owner_user_id")
     await db.obligations.create_index("client_id")
     await db.audit_log.create_index([("client_id", 1), ("created_at", -1)])
+    # One-time cleanup: remove legacy auto-seeded obligations (pre rule-engine, no `code` field)
+    await db.obligations.delete_many({"code": {"$exists": False}})
 
 
 @app.on_event("shutdown")

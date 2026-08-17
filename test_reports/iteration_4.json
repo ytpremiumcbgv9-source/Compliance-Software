@@ -1,0 +1,34 @@
+{
+  "summary": "Retest after two backend fixes: (1) DPT-3 due_rule flipped from 'fixed:06-30' to 'half1:06-30', (2) GET /clients/{id}/obligations no longer auto-seeds SEED_OBLIGATIONS and startup migration deletes legacy rows (missing `code`). Full pytest suite (24 cases) passes on external URL. Adjusted TestObligations.test_seed_and_status_update to assert fresh-client returns [] and then generates 15 obligations before status-update (previously relied on auto-seed >=5).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Consider documenting rule-kind semantics ('fixed:MM-DD' = FY end year, 'half1:MM-DD' = FY start year, 'half2:MM-DD' = FY end year) at the top of resolve_due() so future statutory dates avoid the DPT-3 mis-classification pattern.",
+    "Startup migration delete_many({'code': {'$exists': False}}) is safe today but should be logged and made idempotent-safe (e.g., one-shot flag) in case future documents legitimately omit `code`."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py"
+  ],
+  "success_rate": {
+    "backend": "100% (24/24)",
+    "frontend": "not tested (backend-only retest as requested)"
+  },
+  "seed_data_creation": "Tests create/delete TEST_* clients and TEST_ members per run; session-scoped fixture raises owner client_limit to 50 in Mongo to survive xdist parallelism.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "owner.1786939113@test.local / OwnerPass!123",
+  "context_for_next_testing_agent": "Backend v2 fully green. DPT-3=2026-06-30, MSME-1-H1=2026-10-31, DIR-3-KYC=2027-09-30, MGT-7=2027-05-30, BM-Q1=2026-06-30 all verified for FY 2026-27. GET /clients/{id}/obligations on a fresh client returns [] (no auto-seed). Idempotency verified: first generate creates 15/skips 0, second call creates 0/skips 15. TestObligations was updated to generate before asserting count. If future changes reintroduce SEED_OBLIGATIONS, that test will need to be revisited.",
+  "rca_of_the_issue": "Not applicable — no failing tests."
+}

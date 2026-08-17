@@ -1,0 +1,51 @@
+{
+  "summary": "Extended backend regression to 24 pytest cases covering v2 features (rules library, generate-obligations idempotency + due dates, statutory registers CRUD + CSV, notifications buckets + per-user dismiss, maker-checker submit/approve including submitter-cannot-review-own guard) plus a Playwright UI sweep of the Notifications bell, Statutory registers page CRUD, Compliance register FY select / Generate / status chips, and maker-checker submit + approve. 23/24 backend tests pass; the single failure is a genuine due-date bug in resolve_due for the DPT-3 rule.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/clients/{id}/generate-obligations",
+        "issue": "DPT-3 rule (due_rule 'fixed:06-30') resolves to 2027-06-30 for FY 2026-27, but the spec expects 2026-06-30. Root cause: resolve_due() always uses FY end-year for 'fixed:' rules, so June (a start-year month) is dated a year late. AGM/IEPF-2/DIR-3 KYC (all fixed:09-30) intentionally want end-year, so the fix is not a blanket month-based rewrite — instead, change DPT-3's due_rule to 'half1:06-30' (start-year semantics) or introduce a new 'fixed_start:MM-DD' rule kind and use it for DPT-3.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "Compliance register",
+        "issues": [
+          "After the seed rows and generate-FY rows both exist for the same FY, duplicate DPT-3 rows appear (one from SEED_OBLIGATIONS due 2026-06-30, one from generated rule due 2027-06-30). Same for MGT-7 / AOC-4 / DIR-3 KYC / ADT-1 / MSME-1 / BM. Consider skipping SEED_OBLIGATIONS once the rule engine is invoked, or de-dup on (form, section, fy)."
+        ]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix DPT-3 due date: change COMPLIANCE_RULES entry for DPT-3 from 'fixed:06-30' to 'half1:06-30' so resolve_due() returns FY-start-year 2026-06-30 for FY 2026-27.",
+    "De-duplicate seeded vs generated obligations for the same (form, section, fy). Today calling GET /obligations on a fresh client seeds 7 fixed-date rows, and then Generate-FY adds 15 more; two of them (DPT-3, MSME-1) share form+FY window with the seed rows and both remain visible."
+  ],
+  "critical_code_review_comments": [
+    "resolve_due() 'fixed:MM-DD' semantics are ambiguous (start-year vs end-year); document explicitly and split the rule kind rather than reading MM to decide, otherwise future rules like fixed:04-30 (currently MBP-1) will silently flip meaning.",
+    "GET /api/clients/{id}/obligations lazily seeds SEED_OBLIGATIONS on empty; this collides with the new rule engine. Recommend removing the auto-seed once generate-obligations is the source of truth (or gate seeding behind an explicit query parameter).",
+    "CORS still configured with allow_origins=[FRONTEND_URL or '*'] and allow_credentials=True — wildcard + credentials is browser-rejected. Ensure FRONTEND_URL is set in every deploy env."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py"
+  ],
+  "success_rate": {
+    "backend": "95.8% (23/24)",
+    "frontend": "100% of exercised flows (login, notifications bell + counts + panel, registers page CRUD + download button, compliance register FY select + Generate + chips + maker-checker submit + approve)"
+  },
+  "seed_data_creation": "Tests create/delete TEST_* clients and a TEST_ member per run. Session-scoped fixture raises the owner's client_limit to 50 directly in Mongo so parallel xdist workers do not hit the 5-client quota. UI test created 'UITest Holder' shareholder and removed it in-line.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "owner.1786939113@test.local / OwnerPass!123 (approved owner)",
+  "context_for_next_testing_agent": "Backend test suite now lives at /app/backend/tests/backend_test.py; new v2 classes are TestRulesAndGenerate, TestStatutoryRegisters, TestNotifications, TestMakerChecker. A session-scoped autouse fixture (_raise_owner_limit) bumps owner client_limit to 50 via pymongo — required because tests run under xdist with 2 workers and would otherwise exhaust the 5-client quota. The only failing test asserts DPT-3 due=2026-06-30 for FY 2026-27; once the developer changes the rule to half1:06-30 the assertion will pass. UI selectors verified live: notifications-bell, notifications-panel, notif-count-overdue/t1/t7/t30, notif-item-{id}, notif-jump-{id}, notif-dismiss-{id}, nav-registers-button, register-tile-{key}, register-tab-{key}, register-form-{key}, register-input-{tab}-{field}, register-save-{tab}, register-list-{tab}, register-remove-{id}, download-{key}, register-fy-select, generate-fy-button, chip-{status-slug}, submit-{id}, approve-{id}, rework-{id}. The register-tile selectors require ~500ms wait after the panel appears because the tiles are fetched from GET /registers async.",
+  "rca_of_the_issue": "resolve_due(fy, rule) treats every 'fixed:MM-DD' as end_y (FY end year). The DPT-3 statutory deadline is 30 June of the FY start year (the reporting FY starts April; DPT-3 filed by June 30 of that same year), but AGM / DIR-3 KYC / IEPF-2 use 30 September of the FY end year. Because both cases share the same rule kind, the code cannot express DPT-3 correctly. Recommend either (a) migrating DPT-3 to due_rule='half1:06-30' (which already picks start_y) or (b) adding a new rule prefix like 'fixed_start:MM-DD' and using it for DPT-3."
+}
