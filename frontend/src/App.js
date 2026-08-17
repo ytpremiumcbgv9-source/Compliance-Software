@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import {
-  Building2, CalendarDays, CheckCircle2, ClipboardCheck, FileSpreadsheet,
+  Building2, CalendarDays, CheckCircle2, ClipboardCheck, FileSignature, FileSpreadsheet,
   HelpCircle, History, LayoutDashboard, LogOut, Plus, ScrollText, Settings as SettingsIcon,
   ShieldCheck, UserSquare2, Users,
 } from "lucide-react";
@@ -18,6 +18,7 @@ import AuditTrail from "@/pages/AuditTrail";
 import NotificationsBell from "@/pages/NotificationsBell";
 import OnboardingTour from "@/pages/OnboardingTour";
 import Settings from "@/pages/Settings";
+import Forms from "@/pages/Forms";
 
 import "@/App.css";
 
@@ -26,6 +27,7 @@ const TABS_BASE = [
   ["clients", "Clients", Building2],
   ["register", "Register", ClipboardCheck],
   ["registers", "Statutory registers", ScrollText],
+  ["forms", "MBP-1 / DIR-8", FileSignature],
   ["master", "Master data", UserSquare2],
   ["imports", "Import data", FileSpreadsheet],
   ["audit", "Audit trail", History],
@@ -77,6 +79,7 @@ export default function App() {
     clients: "Client workspaces",
     register: "Compliance register",
     registers: "Statutory registers",
+    forms: "MBP-1 & DIR-8 generator",
     master: "Master data",
     imports: "Import from Excel",
     audit: "Audit trail",
@@ -154,6 +157,7 @@ export default function App() {
           {tab === "clients" && <Clients clients={clients} setActive={setActive} onCreated={() => refreshClients()} user={user} />}
           {tab === "register" && <Register activeClient={active} onToast={notify} />}
           {tab === "registers" && <Registers activeClient={active} onToast={notify} />}
+          {tab === "forms" && <Forms activeClient={active} onToast={notify} />}
           {tab === "master" && <MasterData activeClient={active} onToast={notify} refreshToken={masterRefresh} />}
           {tab === "imports" && (
             active

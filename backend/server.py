@@ -108,6 +108,8 @@ class ClientPatch(BaseModel):
     state: Optional[str] = None
     registered_address: Optional[str] = None
     incorporation_date: Optional[str] = None
+    nominal_capital: Optional[float] = None
+    paid_up_capital: Optional[float] = None
 
 
 class ObligationUpdate(BaseModel):
@@ -129,6 +131,19 @@ class DirectorIn(BaseModel):
     kyc_status: str = "Pending"
     email: Optional[str] = None
     pan: Optional[str] = None
+    father_name: Optional[str] = None
+    address: Optional[str] = None
+
+
+class DirectorProfileIn(BaseModel):
+    father_name: Optional[str] = None
+    address: Optional[str] = None
+    has_disqualification: bool = False
+    interests: Optional[List[Dict[str, Any]]] = None
+    partnerships: Optional[List[Dict[str, Any]]] = None
+    committees: Optional[List[Dict[str, Any]]] = None
+    relatives: Optional[List[Dict[str, Any]]] = None
+    other_directorships: Optional[List[Dict[str, Any]]] = None
 
 
 class AuditorIn(BaseModel):
@@ -1218,6 +1233,54 @@ async def review_obligation(obligation_id: str, payload: ReviewIn, user=Depends(
                     f"{'Approved' if payload.approved else 'Sent back for rework'}: {row['form']}",
                     "obligation", obligation_id)
     return strip(await db.obligations.find_one({"id": obligation_id}, {"_id": 0}))
+
+
+# ---------------------------------------------------------------------------
+# Statutory form generators — MBP-1 and DIR-8
+# ---------------------------------------------------------------------------
+from forms_generator import build_mbp1, build_dir8
+
+
+@api.patch("/clients/{client_id}/directors/{director_id}/profile")
+async def update_director_profile(client_id: str, director_id: str,
+                                  payload: DirectorProfileIn, user=Depends(current_user)):
+    await ensure_owned_client(client_id, user)
+    director = await db.directors.find_one({"id": director_id, "client_id": client_id}, {"_id": 0})
+    if not director:
+        raise HTTPException(404, "Director not found")
+    changes = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if changes:
+        await db.directors.update_one({"id": director_id, "client_id": client_id}, {"$set": changes})
+        await log_audit(client_id, user, "director.profile_updated",
+                        "Updated: " + ", ".join(changes.keys()), "director", director_id)
+    return strip(await db.directors.find_one({"id": director_id, "client_id": client_id}, {"_id": 0}))
+
+
+@api.get("/clients/{client_id}/forms/{form_code}/{director_id}")
+async def generate_form(client_id: str, form_code: str, director_id: str,
+                        fy: str, user=Depends(current_user)):
+    from fastapi.responses import StreamingResponse
+    client = await ensure_owned_client(client_id, user)
+    director = await db.directors.find_one({"id": director_id, "client_id": client_id}, {"_id": 0})
+    if not director:
+        raise HTTPException(404, "Director not found")
+    form_code = form_code.lower()
+    if form_code == "mbp1":
+        content = build_mbp1(client, director, fy)
+        filename = f"MBP-1_{director.get('name','director').replace(' ','_')}_{fy}.docx"
+    elif form_code == "dir8":
+        content = build_dir8(client, director, fy)
+        filename = f"DIR-8_{director.get('name','director').replace(' ','_')}_{fy}.docx"
+    else:
+        raise HTTPException(404, "Unknown form")
+    await log_audit(client_id, user, f"form.{form_code}_generated",
+                    f"Generated {form_code.upper()} for {director.get('name')} — FY {fy}",
+                    "director", director_id)
+    return StreamingResponse(
+        iter([content]),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ---------------------------------------------------------------------------
